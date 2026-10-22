@@ -1,0 +1,26 @@
+# Codeworld roadmap. status: done | doing | next | later
+
+[[goal]]
+name = "v0: JS examples run for real as a 3D factory"
+status = "done"
+done = 2026-10-21
+
+[[goal]]
+name = "Static mode: CLI analyzes any local directory to world.json, viewer loads it without executing"
+status = "next"
+
+[[goal]]
+name = "Scale to thousands of functions: instancing, LOD, directory districts, belt bundling"
+status = "next"
+
+[[goal]]
+name = "COBOL/JCL analyzer emitting CodeGraph (programs, paragraphs, PERFORM/CALL, datasets)"
+status = "later"
+
+[[goal]]
+name = "Async call tracing; classes and methods as machines"
+status = "later"
+
+[[goal]]
+name = "Hot-path overlays from call counts and timings"
+status = "later"

@@ -1,0 +1,112 @@
+#+TITLE: Codeworld
+#+CREATED: [2026-10-21 Wed]
+
+Turn a codebase into a Factorio-style 3D factory you can fly around, poke,
+and watch run. Same stack as Simon Willison's [[https://github.com/simonw/battledrones][battledrones]]: TypeScript, Vite,
+three.js (0.185), every model built procedurally in code. Static HTML, no
+server.
+
+* Run it
+
+#+begin_src sh
+npm install
+npm run dev        # http://localhost:5173/?example=order-service
+npm test           # analyzer + layout tests (vitest)
+npm run smoke      # headless Chrome: load each example, poke every entry point, screenshots in shots/
+npm run build      # static site in dist/
+#+end_src
+
+* The mapping
+
+| Code                          | World                                                                 |
+|-------------------------------+-----------------------------------------------------------------------|
+| module (file)                 | concrete pad, tinted by top-level directory, signed with its path      |
+| function                      | machine; size = lines of code, paint = complexity tier (khaki/blue/amber) |
+| exported function             | machine with a yellow loading arm                                      |
+| call inside a module          | ground belt                                                            |
+| call across modules           | belt on a gantry, routed through the corridor east of the caller's pad |
+| =@route POST /orders=         | receiving station (dock) west of everything                           |
+| =@inbox *.csv=                | hopper: drop a file on the page and it goes in here                    |
+| =@cron 8s=                    | clock tower                                                            |
+| =@store= module               | pad with a silo; its gauge shows the module's =count()=                 |
+| a running call                | arguments ride the belt in (amber), result rides back (green) or a red error token; the machine spins, smokes, lamp goes amber |
+| a call with no belt           | flown over by drone (dynamic dispatch the analyzer missed)            |
+
+Token shape is the value's type: crate = object, barrels = array, plates =
+string, gear = number, chip = boolean, pallet = null/undefined.
+
+Work flows west to east: pads are columns by depth in the module dependency
+graph, so entry points are on the left and stores usually end up on the right.
+
+* How it works
+
+1. *Analyze* (=src/analyze/js.ts=, at build time in the Vite plugin
+   =tools/vite-plugin-codeworld.ts=): parse every module with acorn, collect
+   top-level functions, resolve calls (local, named imports, namespace
+   imports, functions passed as callbacks) into edges, read doc-comment tags
+   for entry points and stores. Output is a language-agnostic =CodeGraph=
+   (=src/analyze/types.ts=).
+2. *Instrument*: the same plugin rewrites each example module on its way to
+   the browser, prepending =fn = __cw.wrap("mod#fn", fn)= for every top-level
+   function. Function declarations are mutable hoisted bindings and ES
+   imports are live, so every caller gets the traced wrapper. Line numbers
+   don't move.
+3. *Run*: =src/runtime/host.ts= loads the real code in the page. The control
+   room, file drag-and-drop, =window.codeworld= and =postMessage= all turn
+   into calls on the entry points. =src/runtime/trace.ts= records each poke
+   as a call tree (args, results, errors, store gauges).
+4. *Replay*: =src/world/player.ts= replays the tree slowly on the belts. Runs
+   play concurrently; calls with many children speed up so loops stream.
+5. *World*: =src/world/layout.ts= (floor plan), =models.ts= / =builder.ts=
+   (procedural low-poly models), =belts.ts=, =world.ts=, =stage.ts= (renderer,
+   sun, RTS camera).
+
+** Scripting it
+
+From the console, or a test harness:
+
+#+begin_src js
+codeworld.request("POST", "/orders", { customer: "a@b.com", lines: [{ sku: "GEAR-01", qty: 2 }] })
+codeworld.drop("TXNS.dat", text)
+codeworld.tick("runNightly")
+codeworld.select("machine", "domain/pricing.js#priceOrder")
+await codeworld.idle()
+// or from another window:
+frame.contentWindow.postMessage({ codeworld: "request", method: "GET", path: "/orders/1001" }, "*")
+#+end_src
+
+* Examples
+
+- =hello-pipeline= :: 3 modules, 6 functions. One route.
+- =order-service= :: 10 modules, 29 functions. Two routes, a CSV inbox, a
+  timer, three stores. Try a bad SKU or an unknown coupon to see errors.
+- =batch-ledger= :: mainframe-flavoured nightly batch: fixed-width
+  transaction file → staging → edit (reject codes) → post to the account
+  master → control report. Structured like COBOL programs and paragraphs.
+
+An example is a directory under =examples/= with a =codeworld.json= (title,
+description), =src/= (ES modules) and optionally =samples/=.
+
+* Status and roadmap
+
+Status (2026-10-21): v0 working end to end on the three examples; tests and
+smoke pass.
+
+Known limits:
+- Synchronous code only: an async function's calls after its first =await=
+  lose their parent.
+- Only top-level =function= declarations are machines (no arrow consts,
+  classes or methods yet).
+- Examples must be self-contained (no npm imports at runtime).
+
+Next, roughly in order (see =goals.toml=):
+1. Static mode: analyze any local directory (CLI → =world.json=) and fly
+   around it without running it; synthetic flows along belts.
+2. Scale: instanced machines, LOD (pads collapse to blocks when zoomed out),
+   districts per directory, belt bundling. Target thousands of functions.
+3. A COBOL/JCL analyzer emitting the same =CodeGraph=: program = pad,
+   paragraph = machine, =PERFORM=/=CALL= = belt, JCL step = dock/timer, DD
+   datasets and VSAM/DB2 tables = stores, copybooks = shared parts. Then the
+   MassMutual mainframe.
+4. Async tracing (AsyncContext / zone-style), classes and methods.
+5. Hot paths: belt wear/heat from call counts; profiling time per machine.

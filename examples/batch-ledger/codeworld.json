@@ -1,0 +1,1 @@
+{ "title": "Batch Ledger", "description": "A mainframe-style nightly batch: fixed-width transaction files land in staging, a timed job edits, posts to the account master, and prints a control report. Structured like COBOL programs and paragraphs." }

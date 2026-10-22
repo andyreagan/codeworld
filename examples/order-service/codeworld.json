@@ -1,0 +1,1 @@
+{ "title": "Order Service", "description": "A small shop backend: place and look up orders over the API, restock by dropping an inventory CSV, and a timer that reports low stock." }
