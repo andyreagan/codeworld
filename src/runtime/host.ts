@@ -1,6 +1,6 @@
 import type { Example } from "virtual:codeworld";
-import type { CodeGraph, FnNode, Trigger } from "../analyze/types";
-import { dockId } from "../world/layout";
+import type { CodeGraph, FnNode } from "../analyze/types";
+import { entriesOf, globToRe, matchRoute, type Driver, type Entry } from "./driver";
 import { Tracer, type Run } from "./trace";
 
 /**
@@ -10,39 +10,21 @@ import { Tracer, type Run } from "./trace";
  * tick to a `@cron`. Each poke is recorded as a Run for the world to replay.
  */
 
-export interface Entry {
-  dock: string;
-  fn: FnNode;
-  trigger: Trigger;
-}
-
 type Mod = Record<string, unknown>;
 
-const globToRe = (glob: string) => new RegExp(`^${glob.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".")}$`, "i");
-
-/** `/orders/:id` against `/orders/1001` -> `{ id: "1001" }`, or null. */
-export function matchRoute(pattern: string, path: string): Record<string, string> | null {
-  const a = pattern.split("/").filter(Boolean);
-  const b = path.split("?")[0]!.split("/").filter(Boolean);
-  if (a.length !== b.length) return null;
-  const params: Record<string, string> = {};
-  for (let i = 0; i < a.length; i++) {
-    if (a[i]!.startsWith(":")) params[a[i]!.slice(1)] = decodeURIComponent(b[i]!);
-    else if (a[i] !== b[i]) return null;
-  }
-  return params;
-}
-
-export class Host {
+export class Host implements Driver {
+  readonly live = true;
   readonly tracer = new Tracer();
   readonly graph: CodeGraph;
-  readonly entries: Entry[] = [];
+  readonly entries: Entry[];
+  readonly samples: Record<string, string>;
   private mods = new Map<string, Mod>();
   private timers = new Map<string, number>();
 
   constructor(readonly example: Example, private onRun: (run: Run) => void) {
     this.graph = example.graph;
-    for (const fn of this.graph.fns) fn.triggers.forEach((trigger, i) => this.entries.push({ dock: dockId(fn.id, i), fn, trigger }));
+    this.samples = example.samples;
+    this.entries = entriesOf(this.graph);
   }
 
   async load(): Promise<void> {

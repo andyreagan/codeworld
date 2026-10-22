@@ -66,3 +66,61 @@ describe("instrumentJs", () => {
 it("analyzes every example", () => {
   for (const ex of examples) expect(analyzeJs(ex.files, { name: ex.name, ...ex.meta }).fns.length).toBeGreaterThan(0);
 });
+
+describe("real-world shapes", () => {
+  const files = {
+    "a.js": `
+import Cart, { helper } from "./b.js";
+const total = (items) => items.reduce((s, i) => s + price(i), 0);
+let price = function (i) { return i.p; };
+export class Shop {
+  constructor() { this.cart = new Cart(); }
+  checkout() { return this.sum() + helper(); }
+  sum() { return total(this.cart.items); }
+  static open() { return new Shop(); }
+}
+export function main() { return Shop.open().checkout(); }
+`,
+    "b.js": `
+export default class Cart { constructor() { this.items = []; } }
+export const helper = () => 1;
+`,
+    "c.js": `
+const b = require("./d");
+const { twice } = require("./d.js");
+module.exports.run = function () { return b() + twice(2); };
+`,
+    "d.js": `
+function once(x) { return x; }
+function twice(x) { return once(x) * 2; }
+module.exports = once;
+module.exports.twice = twice;
+`
+  };
+  const g = analyzeJs(files, { name: "t", title: "t", description: "" });
+  const calls = g.calls.map((c) => `${c.from} -> ${c.to}`).sort();
+  it("maps arrows, function expressions, classes and CommonJS", () => {
+    expect(g.fns.map((f) => f.id).sort()).toEqual([
+      "a.js#Shop.checkout", "a.js#Shop.constructor", "a.js#Shop.open", "a.js#Shop.sum", "a.js#main", "a.js#price", "a.js#total",
+      "b.js#Cart.constructor", "b.js#helper", "c.js#run", "d.js#once", "d.js#twice"
+    ]);
+    expect(g.fns.find((f) => f.id === "d.js#once")!.exported).toBe(true);
+  });
+  it("links this.method, Class.static, new Class, default imports and require", () => {
+    expect(calls).toEqual([
+      "a.js#Shop.checkout -> a.js#Shop.sum",
+      "a.js#Shop.checkout -> b.js#helper",
+      "a.js#Shop.constructor -> b.js#Cart.constructor",
+      "a.js#Shop.open -> a.js#Shop.constructor",
+      "a.js#Shop.sum -> a.js#total",
+      "a.js#main -> a.js#Shop.open",
+      "a.js#total -> a.js#price",
+      "c.js#run -> d.js#once",
+      "c.js#run -> d.js#twice",
+      "d.js#twice -> d.js#once"
+    ]);
+  });
+  it("only instruments hoisted declarations", () => {
+    expect(instrumentJs("a.js", files["a.js"])).toMatch(/^main = globalThis.__cw.wrap\("a.js#main", main\); \n/);
+  });
+});

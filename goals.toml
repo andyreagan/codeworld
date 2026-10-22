@@ -6,8 +6,19 @@ status = "done"
 done = 2026-10-21
 
 [[goal]]
-name = "Static mode: CLI analyzes any local directory to world.json, viewer loads it without executing"
-status = "next"
+name = "Code map file + static mode: CLI analyzes any JS directory, viewer opens it and simulates runs"
+status = "done"
+done = 2026-10-21
+
+[[goal]]
+name = "Belts never run along each other (gantry levels, track assignment, trunks)"
+status = "done"
+done = 2026-10-21
+
+[[goal]]
+name = "Synthesized, spatialized sound for every action"
+status = "done"
+done = 2026-10-21
 
 [[goal]]
 name = "Scale to thousands of functions: instancing, LOD, directory districts, belt bundling"

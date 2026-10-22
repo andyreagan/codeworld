@@ -55,12 +55,20 @@ export function buildBelts(belts: Iterable<Belt>): BeltMeshes {
   const nor: number[] = [];
   const frame = new Builder(0.3);
   let any = false;
+  // belts merged on a trunk share stretches of track: draw each stretch once
+  const drawn = new Set<string>();
   for (const belt of belts) {
     let s = 0;
     for (let i = 1; i < belt.pts.length; i++) {
       const [ax, ay, az] = belt.pts[i - 1]!;
       const [bx, by, bz] = belt.pts[i]!;
       const len = Math.hypot(bx - ax, by - ay, bz - az);
+      const k = [[ax, ay, az], [bx, by, bz]].map((p) => p.map((v) => v.toFixed(2)).join(",")).sort().join("|");
+      if (drawn.has(k)) {
+        s += len;
+        continue;
+      }
+      drawn.add(k);
       if (Math.abs(by - ay) > 1e-6) {
         // a lift shaft: four corner rails, the token rides up the middle
         const lo = Math.min(ay, by);

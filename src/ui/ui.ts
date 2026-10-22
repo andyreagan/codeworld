@@ -1,7 +1,8 @@
 import type { Example } from "virtual:codeworld";
-import type { CodeGraph, FnNode } from "../analyze/types";
-import type { Entry, Host } from "../runtime/host";
+import { CODEMAP_FORMAT, type CodeGraph, type FnNode } from "../analyze/types";
+import { roots, type Driver, type Entry } from "../runtime/driver";
 import type { CallRec, Run } from "../runtime/trace";
+import type { Sfx } from "../world/audio";
 import type { Pick, World } from "../world/world";
 
 /**
@@ -53,14 +54,23 @@ function sourceView(src: string, from: number, to: number, focus?: [number, numb
 
 export interface UiDeps {
   examples: Example[];
-  example: Example;
-  host: Host;
+  driver: Driver;
   world: World;
   /** Select (and fly to) a thing, or clear the selection. */
   focus(p: Pick | null): void;
   setSpeed(x: number): void;
   setFollow(on: boolean): void;
+  sfx: Sfx;
   frameAll(): void;
+  /** Swap the world for a code map loaded from a file. */
+  openMap(graph: CodeGraph): void;
+}
+
+/** Parse a code map file, or say why it isn't one. */
+export function readMap(text: string): CodeGraph {
+  const g = JSON.parse(text) as CodeGraph;
+  if (g?.format !== CODEMAP_FORMAT) throw new Error(`not a code map (want format "${CODEMAP_FORMAT}")`);
+  return g;
 }
 
 export class Ui {
@@ -72,22 +82,37 @@ export class Ui {
   private selected: Pick | null = null;
 
   constructor(private d: UiDeps) {
-    this.graph = d.example.graph;
+    this.graph = d.driver.graph;
     this.fnById = new Map(this.graph.fns.map((f) => [f.id, f]));
     document.body.append(this.topbar(), this.controlRoom(), this.inspector, this.log, this.playback(), this.dropOverlay());
   }
 
   private topbar(): HTMLElement {
     const sel = h("select", { "aria-label": "Example codebase" });
+    const live = this.d.driver.live;
     for (const ex of this.d.examples) {
       const o = h("option", { value: ex.graph.name }, ex.graph.title);
-      if (ex === this.d.example) o.setAttribute("selected", "");
+      if (live && ex.graph === this.graph) o.setAttribute("selected", "");
       sel.append(o);
     }
+    if (!live) sel.prepend(h("option", { value: "", selected: "" }, this.graph.title));
     sel.addEventListener("change", () => {
-      const u = new URL(location.href);
-      u.searchParams.set("example", sel.value);
-      location.href = u.toString();
+      if (!sel.value) return;
+      location.href = `${location.pathname}?example=${encodeURIComponent(sel.value)}`;
+    });
+    // codebase -> code map -> world: open a map someone made with `npm run codemap`, or save this one
+    const file = h("input", { type: "file", accept: ".json,application/json", class: "hidden" }) as HTMLInputElement;
+    file.addEventListener("change", async () => {
+      const f = file.files?.[0];
+      if (f) this.loadMapFile(f);
+    });
+    const open = h("button", { title: "Open a .codemap.json made with npm run codemap" }, "Open map…");
+    open.addEventListener("click", () => file.click());
+    const save = h("button", { title: "Download this world's code map" }, "Save map");
+    save.addEventListener("click", () => {
+      const a = h("a", { href: URL.createObjectURL(new Blob([JSON.stringify(this.graph)], { type: "application/json" })), download: `${this.graph.name}.codemap.json` });
+      a.click();
+      URL.revokeObjectURL(a.href);
     });
     const g = this.graph;
     const stats = `${g.modules.length} modules · ${g.fns.length} functions · ${g.calls.length} belts`;
@@ -96,6 +121,10 @@ export class Ui {
       { class: "topbar" },
       h("div", { class: "brand" }, "CODE", h("b", {}, "WORLD")),
       sel,
+      h("span", { class: `mode ${live ? "live" : "static"}`, title: live ? "The code itself is running in this page" : "Only the code map: runs are simulated from the call graph" }, live ? "live code" : "static map"),
+      open,
+      save,
+      file,
       h("div", { class: "desc" }, g.description, h("span", { class: "stats" }, stats)),
       h("div", { class: "keys" }, "drag pan · right-drag orbit · wheel zoom · WASD · click to inspect")
     );
@@ -103,7 +132,19 @@ export class Ui {
 
   private controlRoom(): HTMLElement {
     const panel = h("aside", { class: "panel control" }, h("h2", {}, "Control room"));
-    for (const e of this.d.host.entries) panel.append(this.entryCard(e));
+    for (const e of this.d.driver.entries) panel.append(this.entryCard(e));
+    if (!this.d.driver.entries.length) {
+      panel.append(h("p", { class: "hint" }, "No entry points are tagged (@route, @inbox, @cron). Trace from the functions that reach the most, or click any machine and press ▶ Trace."));
+      for (const { fn, reach } of roots(this.graph)) {
+        const b = h("button", { class: "root", title: fn.id }, h("code", {}, `${fn.module.split("/").pop()!.replace(/\.(m|c)?js$/, "")}#${fn.name}`), h("span", {}, `reaches ${reach}`));
+        b.addEventListener("click", () => {
+          this.d.focus({ kind: "machine", id: fn.id });
+          this.d.driver.traceFrom?.(fn.id);
+        });
+        panel.append(b);
+      }
+    }
+    if (this.graph.skipped.length) panel.append(h("p", { class: "hint" }, `${this.graph.skipped.length} files couldn't be read (see Save map → skipped).`));
     panel.append(this.legend());
     return panel;
   }
@@ -127,27 +168,27 @@ export class Ui {
     const head = (kind: string, title: string) =>
       h("div", { class: "card-head" }, h("span", { class: `tag ${kind}` }, kind), h("b", {}, title), h("span", { class: "fn" }, `→ ${e.fn.name}()`), locate);
     if (t.kind === "route") {
-      const path = h("input", { class: "path", value: t.path.replace(/:(\w+)/g, (_, k) => (k === "id" ? "1001" : k)), spellcheck: "false" }) as HTMLInputElement;
+      const path = h("input", { class: "path", value: t.path.replace(/:(\w+)/g, (_: string, k: string) => (k === "id" ? "1001" : k)), spellcheck: "false" }) as HTMLInputElement;
       const body = h("textarea", { rows: String(t.method === "GET" ? 1 : 5), spellcheck: "false" }) as HTMLTextAreaElement;
       body.value = JSON.stringify(t.example ?? {}, null, 2);
       const send = h("button", { class: "go" }, "Send");
       send.addEventListener("click", () =>
         fire(() => {
           const parsed = body.value.trim() ? JSON.parse(body.value) : {};
-          return this.d.host.request(t.method, path.value, parsed);
+          return this.d.driver.request(t.method, path.value, parsed);
         })
       );
       return h("section", { class: "card" }, head("route", t.method), h("div", { class: "row" }, path, send), body, out);
     }
     if (t.kind === "inbox") {
-      const sample = t.sample ? this.d.example.samples[t.sample] : undefined;
+      const sample = t.sample ? this.d.driver.samples[t.sample] : undefined;
       const name = t.sample?.split("/").pop() ?? "file";
       const kids: (Node | string)[] = [head("inbox", t.glob)];
       if (sample !== undefined) {
         const ta = h("textarea", { rows: "4", spellcheck: "false", class: "mono" }) as HTMLTextAreaElement;
         ta.value = sample;
         const btn = h("button", { class: "go" }, `Drop ${name}`);
-        btn.addEventListener("click", () => fire(() => this.d.host.drop(name, ta.value)));
+        btn.addEventListener("click", () => fire(() => this.d.driver.drop(name, ta.value)));
         kids.push(ta, h("div", { class: "row" }, btn, h("span", { class: "hint" }, "or drag a file onto the world")));
       } else kids.push(h("span", { class: "hint" }, "drag a file onto the world"));
       kids.push(out);
@@ -155,13 +196,13 @@ export class Ui {
     }
     const toggle = h("button", { class: "go" }, "Start timer");
     toggle.addEventListener("click", () => {
-      const on = !this.d.host.timerOn(e.dock);
-      this.d.host.setTimer(e.dock, on);
+      const on = !this.d.driver.timerOn(e.dock);
+      this.d.driver.setTimer(e.dock, on);
       toggle.textContent = on ? "Stop timer" : "Start timer";
       toggle.classList.toggle("on", on);
     });
     const tick = h("button", {}, "Tick now");
-    tick.addEventListener("click", () => fire(() => this.d.host.tick(e.dock)));
+    tick.addEventListener("click", () => fire(() => this.d.driver.tick(e.dock)));
     return h("section", { class: "card" }, head("cron", `every ${t.every}s`), h("div", { class: "row" }, toggle, tick), out);
   }
 
@@ -197,7 +238,19 @@ export class Ui {
     follow.querySelector("input")!.addEventListener("change", (e) => this.d.setFollow((e.target as HTMLInputElement).checked));
     const all = h("button", {}, "Frame all");
     all.addEventListener("click", () => this.d.frameAll());
-    return h("div", { class: "playback" }, h("span", {}, "speed"), speed, val, follow, all);
+    const sfx = this.d.sfx;
+    const mute = h("button", { class: "mute", title: "Sound on/off (M)", "aria-label": "Sound" }, sfx.isMuted ? "🔇" : "🔊");
+    const vol = h("input", { type: "range", min: "0", max: "1", step: "0.05", value: String(sfx.volume), "aria-label": "Volume", class: "vol" }) as HTMLInputElement;
+    const toggle = () => {
+      sfx.setMuted(!sfx.isMuted);
+      mute.textContent = sfx.isMuted ? "🔇" : "🔊";
+    };
+    mute.addEventListener("click", toggle);
+    addEventListener("keydown", (e) => {
+      if (e.key === "m" && !(e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement)) toggle();
+    });
+    vol.addEventListener("input", () => sfx.setVolume(Number(vol.value)));
+    return h("div", { class: "playback" }, h("span", {}, "speed"), speed, val, follow, all, mute, vol);
   }
 
   private dropOverlay(): HTMLElement {
@@ -217,14 +270,26 @@ export class Ui {
       depth = 0;
       o.classList.add("hidden");
       for (const f of e.dataTransfer?.files ?? []) {
+        if (/\.codemap\.json$/i.test(f.name)) {
+          this.loadMapFile(f);
+          continue;
+        }
         try {
-          this.d.host.drop(f.name, await f.text());
+          this.d.driver.drop(f.name, await f.text());
         } catch (err) {
           this.toast(String(err instanceof Error ? err.message : err), true);
         }
       }
     });
     return o;
+  }
+
+  private async loadMapFile(f: File): Promise<void> {
+    try {
+      this.d.openMap(readMap(await f.text()));
+    } catch (err) {
+      this.toast(`${f.name}: ${err instanceof Error ? err.message : err}`, true);
+    }
   }
 
   toast(text: string, bad = false): void {
@@ -251,7 +316,7 @@ export class Ui {
   }
 
   finished(run: Run): void {
-    const out = this.responses.get(run.dock);
+    const out = run.dock ? this.responses.get(run.dock) : undefined;
     if (out) {
       out.className = run.error === undefined ? "resp ok" : "resp bad";
       // (multi-line strings, like a printed report, shown as lines)
@@ -288,7 +353,7 @@ export class Ui {
       const mod = this.graph.modules.find((x) => x.id === f.module)!;
       const callers = this.graph.calls.filter((c) => c.to === f.id).map((c) => c.from);
       const callees = this.graph.calls.filter((c) => c.from === f.id).map((c) => c.to);
-      const entries = this.d.host.entries.filter((e) => e.fn.id === f.id);
+      const entries = this.d.driver.entries.filter((e) => e.fn.id === f.id);
       el.append(
         close,
         h("div", { class: "kicker" }, `machine · ${f.module}`),
@@ -307,6 +372,11 @@ export class Ui {
         callers.length ? h("div", { class: "rel" }, h("b", {}, "called by "), ...callers.map(fnLink)) : "",
         callees.length ? h("div", { class: "rel" }, h("b", {}, "calls "), ...callees.map(fnLink)) : ""
       );
+      if (this.d.driver.traceFrom) {
+        const go = h("button", { class: "go trace" }, "▶ Trace from here");
+        go.addEventListener("click", () => this.d.driver.traceFrom!(f.id));
+        el.append(go);
+      }
       if (m.recent.length) {
         const list = h("div", { class: "recent" }, h("h3", {}, "Recent calls"));
         for (const c of m.recent)
@@ -320,9 +390,9 @@ export class Ui {
           );
         el.append(list);
       }
-      el.append(h("h3", {}, "Source"), sourceView(mod.source, f.line, f.endLine));
+      if (mod.source) el.append(h("h3", {}, "Source"), sourceView(mod.source, f.line, f.endLine));
     } else if (p.kind === "dock") {
-      const e = this.d.host.entries.find((x) => x.dock === p.id)!;
+      const e = this.d.driver.entries.find((x) => x.dock === p.id)!;
       const t = e.trigger;
       el.append(
         close,
@@ -340,10 +410,9 @@ export class Ui {
         h("h2", {}, mod.id),
         mod.doc ? h("p", { class: "doc" }, mod.doc) : "",
         h("div", { class: "badges" }, h("span", {}, `${mod.loc} lines`), h("span", {}, `${mod.fns.length} functions`), gauge ? h("span", {}, `count() = ${gauge.value}`) : ""),
-        h("div", { class: "rel" }, h("b", {}, "functions "), ...mod.fns.map(fnLink)),
-        h("h3", {}, "Source"),
-        sourceView(mod.source, 1, mod.source.split("\n").length)
+        h("div", { class: "rel" }, h("b", {}, "functions "), ...mod.fns.map(fnLink))
       );
+      if (mod.source) el.append(h("h3", {}, "Source"), sourceView(mod.source, 1, mod.source.split("\n").length));
     }
   }
 }

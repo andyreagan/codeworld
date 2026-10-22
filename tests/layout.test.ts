@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { analyzeJs } from "../src/analyze/js";
 import { beltKey, layoutWorld } from "../src/world/layout";
 import { readExamples } from "../tools/examples";
+import { overlaps } from "./overlap";
 
 for (const ex of readExamples(new URL("../examples", import.meta.url).pathname)) {
   describe(`layout: ${ex.name}`, () => {
@@ -35,6 +36,9 @@ for (const ex of readExamples(new URL("../examples", import.meta.url).pathname))
           expect(moved.length).toBe(1);
         }
       }
+    });
+    it("never runs two belts along each other", () => {
+      expect(overlaps(w.belts.values())).toEqual([]);
     });
     it("puts docks west of every pad", () => {
       const west = Math.min(...w.pads.map((p) => p.x));

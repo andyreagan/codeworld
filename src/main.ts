@@ -1,39 +1,77 @@
 import * as THREE from "three";
 import { examples } from "virtual:codeworld";
+import type { CodeGraph } from "./analyze/types";
+import { Simulator, type Driver } from "./runtime/driver";
 import { Host } from "./runtime/host";
 import type { Run } from "./runtime/trace";
-import { Ui } from "./ui/ui";
+import { keepMap, keptMap } from "./ui/keep";
+import { readMap, Ui } from "./ui/ui";
 import "./ui/style.css";
+import { Sfx } from "./world/audio";
 import { Player } from "./world/player";
 import { Stage } from "./world/stage";
 import { World, type Pick } from "./world/world";
 
 /**
- * Boot: pick the example (`?example=`), build its world, load and run its
- * code, and wire the outside world in: the control room, drag-and-drop,
+ * Boot. Codebase -> code map -> world: the world is drawn from a code map
+ * (analyze/types.ts), either
+ * - an example's (`?example=`), analyzed at build time, whose code is also
+ *   loaded and run for real (live); or
+ * - a code map file (`?map=<url>`, or `?map=local` for the last one opened
+ *   or dropped on the page), from `npm run codemap`: nothing runs, runs are
+ *   simulated from the call graph (static).
+ * Then wire the outside world in: the control room, drag-and-drop,
  * `window.codeworld` and `postMessage`.
  */
 
-const want = new URLSearchParams(location.search).get("example");
-const example = examples.find((e) => e.graph.name === want) ?? examples[0]!;
-document.title = `${example.graph.title} · Codeworld`;
+const q = new URLSearchParams(location.search);
+const mapAt = q.get("map");
+const example = mapAt ? null : (examples.find((e) => e.graph.name === q.get("example")) ?? examples[0]!);
+let graph: CodeGraph;
+try {
+  graph = example ? example.graph : readMap(mapAt === "local" ? await keptMap() : await (await fetch(mapAt!)).text());
+} catch (err) {
+  document.body.textContent = `Couldn't open the code map ${mapAt}: ${err instanceof Error ? err.message : err}`;
+  throw err;
+}
+document.title = `${graph.title} · Codeworld`;
 
 const stage = new Stage(document.getElementById("world")!);
 if (innerWidth > 900) stage.setInset(175);
-const world = new World(example.graph, stage.scene);
+const world = new World(graph, stage.scene);
 stage.ground(world.layout.bounds);
 stage.frame(world.layout.bounds);
 
+// sounds pan with where they happen on screen, and fade with distance from the camera's focus
+const sfx = new Sfx();
+const ndc = new THREE.Vector3();
+sfx.locate = (p) => {
+  ndc.copy(p).project(stage.camera);
+  const focus = stage.camera.position.distanceTo(stage.controls.target);
+  const off = Math.max(0, Math.abs(ndc.x) - 1.1) + Math.max(0, Math.abs(ndc.y) - 1.1);
+  const near = Math.min(1, (focus * 0.9) / Math.max(1, stage.camera.position.distanceTo(p)));
+  return { pan: Math.max(-1, Math.min(1, ndc.x * 0.8)), level: ndc.z > 1 ? 0 : near * Math.max(0, 1 - off) };
+};
+
 let ui: Ui;
-const player = new Player(world, {
-  enter: (c) => ui.enter(c),
-  finished: (r) => ui.finished(r)
-});
-const host = new Host(example, (run: Run) => {
+const player = new Player(
+  world,
+  {
+    enter: (c) => ui.enter(c),
+    finished: (r) => ui.finished(r)
+  },
+  sfx
+);
+const onRun = (run: Run) => {
   ui.started(run);
   void player.play(run);
-});
-await host.load();
+};
+let host: Driver;
+if (example) {
+  const live = new Host(example, onRun);
+  await live.load();
+  host = live;
+} else host = new Simulator(graph, {}, onRun);
 for (const [m, v] of host.gauges()) world.setGauge(m, v);
 
 const placeOf = (p: Pick): THREE.Vector3 => {
@@ -51,12 +89,15 @@ const select = (p: Pick | null, fly: boolean) => {
 
 ui = new Ui({
   examples,
-  example,
-  host,
+  driver: host,
   world,
+  openMap: (g) => {
+    void keepMap(JSON.stringify(g)).then(() => (location.href = `${location.pathname}?map=local`));
+  },
   focus: (p) => select(p, true),
   setSpeed: (x) => (player.speed = x),
   setFollow: (on) => (player.follow = on),
+  sfx,
   frameAll: () => stage.frame(world.layout.bounds)
 });
 
@@ -77,12 +118,15 @@ addEventListener("keydown", (e) => {
 
 // scripted access: window.codeworld.request("POST", "/orders", {...}), or postMessage({ codeworld: "request", ... })
 const api = {
-  graph: example.graph,
-  samples: example.samples,
+  graph,
+  samples: host.samples,
   request: (method: string, path: string, body?: unknown) => host.request(method, path, body),
   drop: (name: string, text: string) => host.drop(name, text),
   tick: (fn: string) => host.tick(host.entries.find((e) => e.fn.name === fn && e.trigger.kind === "cron")!.dock),
   setSpeed: (x: number) => (player.speed = x),
+  audioState: () => sfx.state,
+  /** Static maps: start a simulated run at any function. */
+  trace: (fn: string) => host.traceFrom?.(fn),
   /** Select something and fly to it: `select("machine", "domain/pricing.js#priceOrder")`. */
   select: (kind: Pick["kind"], id: string) => select({ kind, id } as Pick, true),
   /** Resolves once nothing is on the belts. */
@@ -106,6 +150,7 @@ const clock = new THREE.Clock();
 stage.renderer.setAnimationLoop(() => {
   const dt = Math.min(clock.getDelta(), 0.1);
   player.update(dt);
+  sfx.setActivity(player.moving);
   if (player.follow && player.lead?.parent) stage.follow(player.lead.getWorldPosition(new THREE.Vector3()));
   world.update(dt, stage.camera.position.distanceTo(stage.controls.target));
   stage.update(dt);

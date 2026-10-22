@@ -49,9 +49,19 @@ export interface CallEdge {
   to: string;
   /** Call sites in `from`'s body. */
   count: number;
+  /** Line of the first call site (so a simulated run makes its calls in source order). */
+  line: number;
 }
 
+/** The code map file format; bump on breaking changes. */
+export const CODEMAP_FORMAT = "codeworld.codemap/1";
+
+/**
+ * The code map: the contract between analyzers and the world. Saved as
+ * `<name>.codemap.json`; the world can load one without the code itself.
+ */
 export interface CodeGraph {
+  format: typeof CODEMAP_FORMAT;
   name: string;
   title: string;
   description: string;
@@ -60,4 +70,6 @@ export interface CodeGraph {
   fns: FnNode[];
   calls: CallEdge[];
   externals: string[];
+  /** Files the analyzer couldn't read, and why. */
+  skipped: { path: string; reason: string }[];
 }

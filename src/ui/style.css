@@ -105,3 +105,14 @@ input.path { flex: 1; font-family: var(--mono); min-width: 0; }
   .log { height: 64px; }
   .playback { bottom: 84px; }
 }
+
+.mode { font: 700 10px var(--mono); text-transform: uppercase; letter-spacing: 0.08em; padding: 2px 6px; border-radius: 3px; }
+.mode.live { background: #173b24; color: var(--good); }
+.mode.static { background: #2a2f3b; color: #9fc0ff; }
+button.root { display: flex; justify-content: space-between; width: 100%; margin: 3px 0; text-align: left; gap: 8px; }
+button.root code { font: 11px var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+button.root span { color: var(--dim); font-size: 11px; white-space: nowrap; }
+button.trace { margin: 8px 0 4px; }
+.control .hint { margin: 4px 0 8px; }
+button.mute { padding: 2px 6px; }
+input.vol { width: 70px; }

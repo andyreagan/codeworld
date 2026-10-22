@@ -88,6 +88,13 @@ export class Stage {
     cam.near = 1;
     cam.far = span * 4 + 80;
     cam.updateProjectionMatrix();
+    // fog and reach scale with the factory, so a big one isn't lost in the haze
+    const fog = this.scene.fog as THREE.Fog;
+    fog.near = Math.max(90, span * 2.2);
+    fog.far = Math.max(220, span * 5);
+    this.camera.far = fog.far * 1.5;
+    this.camera.updateProjectionMatrix();
+    this.controls.maxDistance = Math.max(260, span * 3.5);
     this.sun.target.position.set(cx, 0, cz);
     this.sun.position.set(cx - span * 0.8, span * 1.6 + 30, cz + span * 1.1);
   }

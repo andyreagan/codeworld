@@ -2,7 +2,13 @@
 #+CREATED: [2026-10-21 Wed]
 
 Turn a codebase into a Factorio-style 3D factory you can fly around, poke,
-and watch run. Same stack as Simon Willison's [[https://github.com/simonw/battledrones][battledrones]]: TypeScript, Vite,
+and watch run (and hear: every action has a synthesized sound).
+
+#+begin_example
+codebase ──analyzer──▶ code map (.codemap.json) ──layout──▶ world
+                         (the contract)             └─ live: the code runs, traced
+                                                    └─ static: runs simulated from the call graph
+#+end_example Same stack as Simon Willison's [[https://github.com/simonw/battledrones][battledrones]]: TypeScript, Vite,
 three.js (0.185), every model built procedurally in code. Static HTML, no
 server.
 
@@ -14,6 +20,11 @@ npm run dev        # http://localhost:5173/?example=order-service
 npm test           # analyzer + layout tests (vitest)
 npm run smoke      # headless Chrome: load each example, poke every entry point, screenshots in shots/
 npm run build      # static site in dist/
+
+# any JavaScript directory -> a code map, then open it in the world
+npm run codemap -- ~/websites/hedonometer -o maps/hedonometer.codemap.json
+# open http://localhost:5173/?map=/maps/hedonometer.codemap.json
+# (or "Open map…" in the top bar, or drop the .codemap.json on the page)
 #+end_src
 
 * The mapping
@@ -31,12 +42,45 @@ npm run build      # static site in dist/
 | =@store= module               | pad with a silo; its gauge shows the module's =count()=                 |
 | a running call                | arguments ride the belt in (amber), result rides back (green) or a red error token; the machine spins, smokes, lamp goes amber |
 | a call with no belt           | flown over by drone (dynamic dispatch the analyzer missed)            |
+| a much-called function        | its incoming belts merge into trunks (a main bus) once its face is full |
 
 Token shape is the value's type: crate = object, barrels = array, plates =
 string, gear = number, chip = boolean, pallet = null/undefined.
 
 Work flows west to east: pads are columns by depth in the module dependency
 graph, so entry points are on the left and stores usually end up on the right.
+
+* The code map
+
+The middle of the pipeline is a file: =<name>.codemap.json=, format
+=codeworld.codemap/1= (=src/analyze/types.ts= =CodeGraph=): modules,
+functions (lines, complexity, doc, triggers, optional source), call edges
+(count, first call-site line), externals, and files the analyzer skipped.
+Analyzers for other languages only need to emit this; the world never
+looks at code directly.
+
+- *Live* (the examples): analyzed at build time; the code itself runs in
+  the page, instrumented, and real runs are replayed.
+- *Static* (any code map): nothing runs. A run is simulated by walking the
+  call graph from an entry point, calls in source order, each path once. If
+  nothing is tagged as an entry point, the control room offers the
+  functions that reach the most; any machine has "▶ Trace from here".
+
+The JS analyzer understands =function= declarations, functions/arrows bound
+to top-level =const=/=let=/=var=, class methods (=this.m()=, =Class.m()=,
+=new Class()=), ES imports, CommonJS (=require=, =module.exports=), and
+classic browser scripts sharing globals (=ns.fn = function=). Not yet:
+functions nested in closures, methods on values whose type isn't known.
+
+* Sound
+
+All synthesized with WebAudio (=src/world/audio.ts=), panned by where it
+happens on screen and fading with distance from the camera's focus: a
+factory hum that swells with traffic, conveyor clacks, machine chugs (lower
+for higher tiers), a bell when a function returns (pitched up the
+pentatonic scale by call depth, so a deep call tree plays a little tune),
+buzzer on a throw, bloops as stores fill, chimes/grinders/tick-tocks at the
+docks. Busy runs are thinned (minimum gap per sound, voice cap). M mutes.
 
 * How it works
 
@@ -92,7 +136,17 @@ description), =src/= (ES modules) and optionally =samples/=.
 Status (2026-10-21): v0 working end to end on the three examples; tests and
 smoke pass.
 
+Status (2026-10-21, later): belts no longer run along each other (two
+gantry levels, track assignment, trunks); code map files + static mode; JS
+analyzer handles classes, arrows, CommonJS and classic scripts; sound.
+Tried on real repos: hedonometer.org (93 modules, 161 functions) lays out
+in ~60 ms.
+
 Known limits:
+- A few short jogs near crowded ports can still sit on each other (6–12
+  per real codebase of a few hundred belts; zero on the examples).
+- Track assignment is O(n²); fine for hundreds of belts, needs a spatial
+  index for thousands.
 - Synchronous code only: an async function's calls after its first =await=
   lose their parent.
 - Only top-level =function= declarations are machines (no arrow consts,
@@ -100,13 +154,11 @@ Known limits:
 - Examples must be self-contained (no npm imports at runtime).
 
 Next, roughly in order (see =goals.toml=):
-1. Static mode: analyze any local directory (CLI → =world.json=) and fly
-   around it without running it; synthetic flows along belts.
-2. Scale: instanced machines, LOD (pads collapse to blocks when zoomed out),
+1. Scale: instanced machines, LOD (pads collapse to blocks when zoomed out),
    districts per directory, belt bundling. Target thousands of functions.
-3. A COBOL/JCL analyzer emitting the same =CodeGraph=: program = pad,
+2. A COBOL/JCL analyzer emitting the same =CodeGraph=: program = pad,
    paragraph = machine, =PERFORM=/=CALL= = belt, JCL step = dock/timer, DD
    datasets and VSAM/DB2 tables = stores, copybooks = shared parts. Then the
    MassMutual mainframe.
-4. Async tracing (AsyncContext / zone-style), classes and methods.
-5. Hot paths: belt wear/heat from call counts; profiling time per machine.
+3. Async tracing (AsyncContext / zone-style), classes and methods.
+4. Hot paths: belt wear/heat from call counts; profiling time per machine.

@@ -8,7 +8,8 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "test": "vitest run",
-    "smoke": "node tools/smoke.mjs"
+    "smoke": "node tools/smoke.mjs",
+    "codemap": "tsx tools/codemap.ts"
   },
   "dependencies": {
     "acorn": "^8.19.0",
@@ -19,6 +20,7 @@
     "@types/node": "^26.6.5",
     "@types/three": "^0.185.4",
     "playwright-core": "^1.64.1",
+    "tsx": "^4.23.15",
     "typescript": "^7.0.2",
     "vite": "^6.4.5",
     "vitest": "^2.1.9"

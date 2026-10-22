@@ -23,8 +23,8 @@ export interface CallRec {
 
 export interface Run {
   label: string;
-  /** The trigger that started it: a dock id (see world/layout.ts). */
-  dock: string;
+  /** The trigger that started it: a dock id (see world/layout.ts), or null for a trace started at a machine. */
+  dock: string | null;
   root: CallRec | null;
   result?: unknown;
   error?: string;
@@ -100,7 +100,7 @@ export class Tracer {
   }
 
   /** Run one trigger's handler, recording everything it calls. */
-  record(label: string, dock: string, f: () => unknown): Run {
+  record(label: string, dock: string | null, f: () => unknown): Run {
     const roots: CallRec[] = [];
     this.current = roots;
     const start = this.seq;

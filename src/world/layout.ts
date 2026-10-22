@@ -12,8 +12,11 @@ import type { CodeGraph, FnNode, ModuleNode, Trigger } from "../analyze/types";
  *   (colour) follows complexity.
  * - Each entry point (route, inbox, timer) is a dock west of everything.
  * - Each call edge is a belt: on the ground inside a pad, raised on gantries
- *   between pads (over whatever's in the way), turning only at right angles,
- *   each in its own lane of the corridor east of its caller's pad.
+ *   between pads (over whatever's in the way), turning only at right angles.
+ *   Raised belts run east-west on one level and north-south (in the
+ *   corridor east of the caller's pad) on the level above, so crossings
+ *   pass over each other; then `untangle` moves any run that would lie
+ *   along another onto a free track beside it.
  */
 
 export type P3 = [number, number, number];
@@ -38,6 +41,8 @@ export interface PadSpot {
   d: number;
   /** A store's tank, centre. */
   silo?: { x: number; z: number };
+  /** The east edge of its column: its belts turn north or south in the corridor past it. */
+  corridor: number;
 }
 
 export interface DockSpot {
@@ -54,6 +59,12 @@ export interface Belt {
   to: string;
   pts: P3[];
   elevated: boolean;
+  /**
+   * Shared ports: when a machine has more callers (or callees) than its face
+   * has room for, belts merge into trunks, and belts on one trunk may share
+   * track. Keys like `in:<fn>:<port>`.
+   */
+  trunks: string[];
 }
 
 export interface WorldLayout {
@@ -66,6 +77,10 @@ export interface WorldLayout {
 
 export const BELT_Y = 0.14;
 export const GANTRY_Y = 2.8;
+/** North-south gantry runs, a level above the east-west ones. */
+export const GANTRY_Z_Y = GANTRY_Y + 0.6;
+/** Belt runs closer than this (centre to centre) would touch. */
+const TRACK = 0.62;
 export const DOCK_W = 4;
 export const DOCK_D = 3.2;
 const PAD_MARGIN = 1.6;
@@ -76,7 +91,8 @@ const PAD_GAP = 3;
 const SILO_W = 3.4;
 const LANE = 0.5;
 
-export const machineSize = (f: FnNode): number => (f.loc <= 6 ? 2 : f.loc <= 15 ? 3 : 4);
+/** Size by lines of code, grown if needed so every belt port on its busiest face gets its own track. */
+export const machineSize = (f: FnNode, ports = 0): number => Math.min(8, Math.max(f.loc <= 6 ? 2 : f.loc <= 15 ? 3 : 4, Math.ceil(ports * TRACK + 0.6)));
 export const machineTier = (f: FnNode): 1 | 2 | 3 => (f.complexity <= 2 ? 1 : f.complexity <= 5 ? 2 : 3);
 export const beltKey = (from: string, to: string): string => `${from}->${to}`;
 export const dockId = (fn: string, i: number): string => `dock:${fn}:${i}`;
@@ -118,7 +134,8 @@ function depths(nodes: string[], edges: [string, string][]): Map<string, number>
 }
 
 /** Lay out a pad's machines (relative to the pad's corner) and size the pad. */
-function planPad(mod: ModuleNode, graph: CodeGraph, fnById: Map<string, FnNode>) {
+function planPad(mod: ModuleNode, graph: CodeGraph, fnById: Map<string, FnNode>, ports: Map<string, number>) {
+  const machineSize_ = (f: FnNode) => machineSize(f, ports.get(f.id));
   const own = new Set(mod.fns);
   const intra = graph.calls.filter((c) => own.has(c.from) && own.has(c.to)).map((c): [string, string] => [c.from, c.to]);
   const depth = depths(mod.fns, intra);
@@ -128,10 +145,10 @@ function planPad(mod: ModuleNode, graph: CodeGraph, fnById: Map<string, FnNode>)
   let x = PAD_MARGIN;
   let tallest = 0;
   for (const col of cols.filter(Boolean)) {
-    const w = Math.max(...col.map(machineSize));
+    const w = Math.max(...col.map(machineSize_));
     let z = PAD_HEADER + PAD_MARGIN;
     for (const fn of col) {
-      const size = machineSize(fn);
+      const size = machineSize_(fn);
       spots.push({ fn, x: x + w / 2, z: z + size / 2, size, tier: machineTier(fn) });
       z += size + ROW_GAP;
     }
@@ -160,32 +177,61 @@ export function layoutWorld(graph: CodeGraph): WorldLayout {
   // columns of pads; within a column, order by where their callers sit (barycentre), then by path
   const layers: ModuleNode[][] = [];
   for (const m of graph.modules) (layers[layerOf.get(m.id)!] ??= []).push(m);
-  const plans = new Map(graph.modules.map((m) => [m.id, planPad(m, graph, fnById)]));
+  // ports on each machine's busier face: calls out (east), or calls and triggers in (west)
+  const outs = new Map<string, number>();
+  const ins = new Map<string, number>();
+  for (const c of graph.calls)
+    if (c.from !== c.to) {
+      outs.set(c.from, (outs.get(c.from) ?? 0) + 1);
+      ins.set(c.to, (ins.get(c.to) ?? 0) + 1);
+    }
+  const ports = new Map(graph.fns.map((f) => [f.id, Math.max(outs.get(f.id) ?? 0, (ins.get(f.id) ?? 0) + f.triggers.length)]));
+  const plans = new Map(graph.modules.map((m) => [m.id, planPad(m, graph, fnById, ports)]));
+  // a column taller than this wraps into several, so a big flat codebase makes a square factory, not a ribbon
+  const area = graph.modules.reduce((s, m) => s + (plans.get(m.id)!.w + PAD_GAP) * (plans.get(m.id)!.d + PAD_GAP), 0);
+  const maxColumn = Math.max(40, Math.sqrt(area) * 1.1);
+  const importers = new Map<string, string[]>();
+  for (const [a, b] of modEdges) (importers.get(b) ?? importers.set(b, []).get(b)!).push(a);
+  const outFrom = new Map<string, number>();
+  for (const [a, b] of modEdges) if (a !== b) outFrom.set(a, (outFrom.get(a) ?? 0) + 1);
   const centreZ = new Map<string, number>();
   const pads: PadSpot[] = [];
   const machines = new Map<string, MachineSpot>();
-  const outCount = (l: number) => modEdges.filter(([a, b]) => layerOf.get(a) === l && a !== b).length;
   let x = 0;
   layers.forEach((layer, li) => {
     if (!layer) return;
     const bary = (m: ModuleNode) => {
-      const zs = modEdges.filter(([, b]) => b === m.id).map(([a]) => centreZ.get(a)).filter((z): z is number => z !== undefined);
+      const zs = (importers.get(m.id) ?? []).map((a) => centreZ.get(a)).filter((z): z is number => z !== undefined);
       return zs.length ? zs.reduce((a, b) => a + b, 0) / zs.length : 0;
     };
     layer.sort((a, b) => bary(a) - bary(b) || a.id.localeCompare(b.id));
-    const total = layer.reduce((s, m) => s + plans.get(m.id)!.d, 0) + PAD_GAP * (layer.length - 1);
-    let z = -total / 2;
-    const w = Math.max(...layer.map((m) => plans.get(m.id)!.w));
-    for (const mod of layer) {
-      const p = plans.get(mod.id)!;
-      const pad: PadSpot = { mod, layer: li, x, z, w: p.w, d: p.d };
-      if (p.silo) pad.silo = { x: x + p.silo.x, z: z + p.silo.z };
-      pads.push(pad);
-      centreZ.set(mod.id, z + p.d / 2);
-      for (const s of p.spots) machines.set(s.fn.id, { ...s, pad: mod.id, x: x + s.x, z: z + s.z });
-      z += p.d + PAD_GAP;
+    // cut the layer into columns no taller than maxColumn
+    const columns: ModuleNode[][] = [[]];
+    let height = 0;
+    for (const m of layer) {
+      const d = plans.get(m.id)!.d + PAD_GAP;
+      if (height + d > maxColumn && columns[columns.length - 1]!.length) {
+        columns.push([]);
+        height = 0;
+      }
+      columns[columns.length - 1]!.push(m);
+      height += d;
     }
-    x += w + 4 + LANE * outCount(li);
+    for (const col of columns) {
+      const total = col.reduce((s, m) => s + plans.get(m.id)!.d, 0) + PAD_GAP * (col.length - 1);
+      const w = Math.max(...col.map((m) => plans.get(m.id)!.w));
+      let z = -total / 2;
+      for (const mod of col) {
+        const p = plans.get(mod.id)!;
+        const pad: PadSpot = { mod, layer: li, x, z, w: p.w, d: p.d, corridor: x + w };
+        if (p.silo) pad.silo = { x: x + p.silo.x, z: z + p.silo.z };
+        pads.push(pad);
+        centreZ.set(mod.id, z + p.d / 2);
+        for (const s of p.spots) machines.set(s.fn.id, { ...s, pad: mod.id, x: x + s.x, z: z + s.z });
+        z += p.d + PAD_GAP;
+      }
+      x += w + 4 + LANE * col.reduce((n, m) => n + (outFrom.get(m.id) ?? 0), 0);
+    }
   });
 
   // docks, in a column west of everything, each level with its handler where there's room
@@ -203,7 +249,11 @@ export function layoutWorld(graph: CodeGraph): WorldLayout {
   }
 
   // belts
-  type Edge = { from: string; to: string; fx: number; fz: number; tx: number; tz: number; corridor: number; intra: boolean; padBottom: number };
+  type Edge = {
+    from: string; to: string; fx: number; fz: number; tx: number; tz: number; corridor: number; intra: boolean; padBottom: number;
+    /** Its place among the belts leaving its source, and among those reaching its target. */
+    fromIdx: number; toIdx: number; trunks: string[];
+  };
   const edges: Edge[] = [];
   const padOf = new Map(pads.map((p) => [p.mod.id, p]));
   for (const c of graph.calls) {
@@ -213,27 +263,35 @@ export function layoutWorld(graph: CodeGraph): WorldLayout {
     const pa = padOf.get(a.pad)!;
     edges.push({
       from: c.from, to: c.to, fx: a.x + a.size / 2, fz: a.z, tx: b.x - b.size / 2, tz: b.z,
-      corridor: pa.x + pa.w, intra: a.pad === b.pad, padBottom: pa.z + pa.d
+      corridor: pa.corridor, intra: a.pad === b.pad, padBottom: pa.z + pa.d, fromIdx: 0, toIdx: 0, trunks: []
     });
   }
   for (const d of docks) {
     const b = machines.get(d.fn)!;
-    edges.push({ from: d.id, to: d.fn, fx: d.x + DOCK_W / 2, fz: d.z, tx: b.x - b.size / 2, tz: b.z, corridor: d.x + DOCK_W / 2, intra: false, padBottom: 0 });
+    edges.push({ from: d.id, to: d.fn, fx: d.x + DOCK_W / 2, fz: d.z, tx: b.x - b.size / 2, tz: b.z, corridor: d.x + DOCK_W / 2, intra: false, padBottom: 0, fromIdx: 0, toIdx: 0, trunks: [] });
   }
   // spread each machine's ports along its face, in the order of what's at the other end
-  const spread = (key: "from" | "to", other: "tz" | "fz", coord: "fz" | "tz", sizeOf: (id: string) => number) => {
+  const spread = (key: "from" | "to", other: "tz" | "fz", coord: "fz" | "tz", idx: "fromIdx" | "toIdx", sizeOf: (id: string) => number) => {
     const groups = new Map<string, Edge[]>();
     for (const e of edges) (groups.get(e[key]) ?? groups.set(e[key], []).get(e[key])!).push(e);
     for (const [id, es] of groups) {
       es.sort((a, b) => a[other] - b[other]);
-      const face = sizeOf(id) - 0.7;
-      const step = es.length > 1 ? Math.min(0.6, face / (es.length - 1)) : 0;
-      es.forEach((e, i) => (e[coord] += (i - (es.length - 1) / 2) * step));
+      const face = sizeOf(id) - 0.6;
+      // a port per belt while there's room on the face; past that, neighbours merge onto shared ports
+      const room = Math.max(1, Math.floor(face / TRACK) + 1);
+      const n = Math.min(es.length, room);
+      const step = n > 1 ? Math.min(0.75, face / (n - 1)) : 0;
+      es.forEach((e, i) => {
+        const port = Math.floor((i * n) / es.length);
+        e[coord] += (port - (n - 1) / 2) * step;
+        e[idx] = port;
+        if (es.length > n) e.trunks.push(`${key === "from" ? "out" : "in"}:${id}:${port}`);
+      });
     }
   };
   const sizeOf = (id: string) => machines.get(id)?.size ?? DOCK_D;
-  spread("from", "tz", "fz", sizeOf);
-  spread("to", "fz", "tz", sizeOf);
+  spread("from", "tz", "fz", "fromIdx", sizeOf);
+  spread("to", "fz", "tz", "toIdx", sizeOf);
   const lanes = new Map<number, number>();
   const belts = new Map<string, Belt>();
   for (const e of edges) {
@@ -253,14 +311,18 @@ export function layoutWorld(graph: CodeGraph): WorldLayout {
       const lane = lanes.get(e.corridor) ?? 0;
       lanes.set(e.corridor, lane + 1);
       const cx = e.corridor + 1.2 + lane * LANE;
-      const H = GANTRY_Y + (lane % 3) * 0.12;
-      const up = e.fx + 0.6;
-      const down = e.tx - 0.6;
-      pts.push([up, y, e.fz], [up, H, e.fz], [cx, H, e.fz], [cx, H, e.tz], [down, H, e.tz], [down, y, e.tz], [e.tx, y, e.tz]);
+      const [H, HZ] = [GANTRY_Y, GANTRY_Z_Y];
+      // each belt rises in its own column, stepping out from the machine, so their jogs never stack
+      const up = e.fx + 0.6 + e.fromIdx * TRACK;
+      const down = e.tx - 0.6 - e.toIdx * TRACK;
+      pts.push([up, y, e.fz], [up, H, e.fz], [cx, H, e.fz]);
+      if (Math.abs(e.fz - e.tz) > 0.01) pts.push([cx, HZ, e.fz], [cx, HZ, e.tz], [cx, H, e.tz]);
+      pts.push([down, H, e.tz], [down, y, e.tz], [e.tx, y, e.tz]);
     }
     const key = beltKey(e.from, e.to);
-    belts.set(key, { key, from: e.from, to: e.to, pts: dedupe(pts), elevated: !e.intra });
+    belts.set(key, { key, from: e.from, to: e.to, pts: dedupe(pts), elevated: !e.intra, trunks: e.trunks });
   }
+  untangle([...belts.values()]);
 
   const xs = [...pads.flatMap((p) => [p.x, p.x + p.w]), ...docks.flatMap((d) => [d.x - DOCK_W / 2, d.x + DOCK_W / 2])];
   const zs = [...pads.flatMap((p) => [p.z, p.z + p.d]), ...docks.flatMap((d) => [d.z - DOCK_D / 2, d.z + DOCK_D / 2])];
@@ -268,6 +330,90 @@ export function layoutWorld(graph: CodeGraph): WorldLayout {
     pads, machines, docks, belts,
     bounds: { minX: Math.min(...xs), maxX: Math.max(...xs), minZ: Math.min(...zs), maxZ: Math.max(...zs) }
   };
+}
+
+interface Run {
+  key: string;
+  trunks: string[];
+  axis: 0 | 2;
+  y: number;
+  c: number;
+  lo: number;
+  hi: number;
+}
+
+const runOf = (b: Belt, p: P3, q: P3): Run | null => {
+  if (Math.abs(p[1] - q[1]) > 1e-6) return null; // a lift
+  const axis = Math.abs(p[0] - q[0]) > 1e-6 ? 0 : 2;
+  return { key: b.key, trunks: b.trunks, axis, y: p[1], c: p[axis === 0 ? 2 : 0], lo: Math.min(p[axis], q[axis]), hi: Math.max(p[axis], q[axis]) };
+};
+
+const sameTrunk = (a: Run, b: Run): boolean => a.trunks.some((t) => b.trunks.includes(t));
+
+const clash = (a: Run, b: Run): boolean =>
+  a.key !== b.key && !sameTrunk(a, b) && a.axis === b.axis && Math.abs(a.y - b.y) < 0.3 && Math.abs(a.c - b.c) < TRACK - 1e-6 &&
+  Math.min(a.hi, b.hi) - Math.max(a.lo, b.lo) > -0.35;
+
+/** The fixed stub at each port: how far a belt runs straight out before it may jog aside. */
+const STUB = 0.3;
+
+/**
+ * Track assignment: walk every belt's level runs, longest belts first, and
+ * slide any run that would lie along an already-placed one sideways onto
+ * the nearest free track. Only a short stub at each port stays put; where a
+ * moved run meets a port stub or a lift, a short jog keeps them in place.
+ */
+function untangle(belts: Belt[]): void {
+  const placed: Run[] = [];
+  const stub = (b: Belt, port: P3, toward: P3): void => {
+    const r = runOf(b, port, toward);
+    if (!r) return;
+    const d = Math.sign(toward[r.axis] - port[r.axis]) * STUB;
+    placed.push({ ...r, lo: Math.min(port[r.axis], port[r.axis] + d), hi: Math.max(port[r.axis], port[r.axis] + d) });
+  };
+  for (const b of belts) {
+    stub(b, b.pts[0]!, b.pts[1]!);
+    stub(b, b.pts[b.pts.length - 1]!, b.pts[b.pts.length - 2]!);
+  }
+  const len = (b: Belt) => b.pts.reduce((s, p, i) => (i ? s + Math.abs(p[0] - b.pts[i - 1]![0]) + Math.abs(p[2] - b.pts[i - 1]![2]) : 0), 0);
+  for (const b of [...belts].sort((x, y) => len(y) - len(x))) {
+    const pts = b.pts;
+    // from the far end back, so the jogs spliced in behind never come round again
+    for (let i = pts.length - 2; i >= 0; i--) {
+      const run = runOf(b, pts[i]!, pts[i + 1]!);
+      if (!run) continue;
+      const first = i === 0;
+      const last = i === pts.length - 2;
+      const room = run.hi - run.lo - (first ? STUB : 0) - (last ? STUB : 0);
+      let c = run.c;
+      if (room > 0.15)
+        for (let k = 1; k < 40 && placed.some((p) => clash({ ...run, c }, p)); k++) c = run.c + Math.ceil(k / 2) * TRACK * (k % 2 ? 1 : -1);
+      placed.push({ ...run, c });
+      if (c === run.c) continue;
+      const perp = run.axis === 0 ? 2 : 0;
+      const dir = Math.sign(pts[i + 1]![run.axis] - pts[i]![run.axis]);
+      const moved = (p: P3): P3 => {
+        const q: P3 = [...p];
+        q[perp] = c;
+        return q;
+      };
+      // the far end: jog before the port stub or a lift, or stretch the level run that follows
+      if (last) {
+        const anchor: P3 = [...pts[i + 1]!];
+        anchor[run.axis] -= dir * STUB;
+        pts.splice(i + 1, 0, moved(anchor), anchor);
+      } else if (runOf(b, pts[i + 1]!, pts[i + 2]!)) pts[i + 1]![perp] = c;
+      else pts.splice(i + 1, 0, moved(pts[i + 1]!));
+      // the near end, likewise
+      if (first) {
+        const anchor: P3 = [...pts[0]!];
+        anchor[run.axis] += dir * STUB;
+        pts.splice(1, 0, anchor, moved(anchor));
+      } else if (runOf(b, pts[i - 1]!, pts[i]!)) pts[i]![perp] = c;
+      else pts.splice(i + 1, 0, moved(pts[i]!));
+    }
+    b.pts = dedupe(pts);
+  }
 }
 
 /** Drop repeated and collinear-redundant points. */
