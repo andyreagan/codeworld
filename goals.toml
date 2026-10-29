@@ -21,11 +21,25 @@ status = "done"
 done = 2026-10-21
 
 [[goal]]
-name = "Scale to thousands of functions: instancing, LOD, directory districts, belt bundling"
+name = "COBOL/JCL analyzer emitting CodeGraph (programs, paragraphs, PERFORM/CALL, datasets), with slicing"
+status = "done"
+done = 2026-10-28
+
+[[goal]]
+name = "Belt router spatial index (thousands of belts in under a second)"
+status = "done"
+done = 2026-10-28
+
+[[goal]]
+name = "Run on the real mainframe sources; fix what the inventory gets wrong"
 status = "next"
 
 [[goal]]
-name = "COBOL/JCL analyzer emitting CodeGraph (programs, paragraphs, PERFORM/CALL, datasets)"
+name = "Scheduler input (CA-7 / Control-M / TWS) and an application-level zoomed-out view"
+status = "later"
+
+[[goal]]
+name = "Scale to tens of thousands of functions: instancing, LOD, belt bundling"
 status = "later"
 
 [[goal]]

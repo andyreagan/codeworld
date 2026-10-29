@@ -115,7 +115,7 @@ export class Simulator implements Driver {
 
   tick(dock: string): Run {
     const e = this.entries.find((x) => x.dock === dock)!;
-    return this.simulate(e.fn.id, `tick ${e.fn.name}`, dock);
+    return this.simulate(e.fn.id, `${e.trigger.kind === "job" ? "submit" : "tick"} ${e.fn.name}`, dock);
   }
 
   traceFrom(fn: string): Run {

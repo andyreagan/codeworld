@@ -1,0 +1,5 @@
+{
+  "title": "Policy billing (mainframe)",
+  "description": "A made-up mainframe billing system: nightly and monthly batch jobs, COBOL with DB2 and CICS, a PROC, an Easytrieve report, an assembler print module.",
+  "language": "mainframe"
+}

@@ -50,6 +50,7 @@ input.path { flex: 1; font-family: var(--mono); min-width: 0; }
 .tag.route { background: #2f8f6a; color: #04140d; }
 .tag.inbox { background: #7a5aa8; color: #0d0614; }
 .tag.cron { background: #a8453a; color: #160504; }
+.tag.job { background: #3a6fa8; color: #050c16; }
 .row { display: flex; gap: 6px; align-items: center; }
 .hint { color: var(--dim); font-size: 11px; }
 .resp { margin: 0; font: 11px/1.35 var(--mono); max-height: 140px; overflow: auto; white-space: pre-wrap; word-break: break-all; padding: 5px 6px; border-radius: 4px; background: #12100d; }

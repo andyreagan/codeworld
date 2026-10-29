@@ -67,11 +67,11 @@ const onRun = (run: Run) => {
   void player.play(run);
 };
 let host: Driver;
-if (example) {
+if (example?.live) {
   const live = new Host(example, onRun);
   await live.load();
   host = live;
-} else host = new Simulator(graph, {}, onRun);
+} else host = new Simulator(graph, example?.samples ?? {}, onRun);
 for (const [m, v] of host.gauges()) world.setGauge(m, v);
 
 const placeOf = (p: Pick): THREE.Vector3 => {
@@ -123,6 +123,8 @@ const api = {
   request: (method: string, path: string, body?: unknown) => host.request(method, path, body),
   drop: (name: string, text: string) => host.drop(name, text),
   tick: (fn: string) => host.tick(host.entries.find((e) => e.fn.name === fn && e.trigger.kind === "cron")!.dock),
+  /** Submit a batch job by name. */
+  submit: (job: string) => host.tick(host.entries.find((e) => e.trigger.kind === "job" && e.trigger.name === job)!.dock),
   setSpeed: (x: number) => (player.speed = x),
   audioState: () => sfx.state,
   /** Static maps: start a simulated run at any function. */

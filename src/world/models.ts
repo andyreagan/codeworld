@@ -127,7 +127,7 @@ export function siloModel(): { body: THREE.BufferGeometry; gaugeAt: V3; gaugeH: 
   return { body: b.build(), gaugeAt: [-r - 0.26, 0.55, 0], gaugeH: h - 0.6, height: h + 1 };
 }
 
-export type DockKind = "route" | "inbox" | "cron";
+export type DockKind = "route" | "inbox" | "cron" | "job";
 
 export interface DockModel {
   body: THREE.BufferGeometry;
@@ -170,6 +170,21 @@ export function dockModel(kind: DockKind, accent: number): DockModel {
       .box(0.08, 0.6, 0.08, HAZARD, [0, -0.3, 0])
       .build();
     return { body: b.build(), spinner: drum, spinnerAt: [1.3, 1.05, 0], spinAxis: "z", lampAt: [1.7, 0.95, 1.1] };
+  }
+  if (kind === "job") {
+    // a job entry station: a card reader with its hopper of punched cards, and an operator's console
+    b.block(2.2, 1.2, 2.0, accent, [-0.5, 0.3, 0], 0.08, 1.3);
+    b.cyl(0.75, 0.45, 0.7, STEEL, [-0.9, 1.5, 0], 4, { rot: [0, Math.PI / 4, 0] });
+    for (let i = 0; i < 6; i++) b.box(0.62, 0.05, 0.36, i % 2 ? 0xe9dfc4 : 0xd8cca8, [-0.9, 1.75 + i * 0.06, 0]);
+    b.box(0.9, 1.2, 0.9, STEEL_L, [-0.6, 0.3, -1.05]);
+    b.box(0.7, 0.5, 0.04, 0x0d2a14, [-0.6, 1.0, -0.59]);
+    b.box(0.5, 0.06, 0.04, GOOD, [-0.6, 1.1, -0.56], { grade: 0 });
+    b.box(1.4, 0.5, 1.2, STEEL_L, [1.1, 0.3, 0]);
+    const roller = new Builder(0)
+      .cyl(0.18, 0.18, 1.0, STEEL_D, [0, 0, -0.5], 8, { rot: [Math.PI / 2, 0, 0] })
+      .box(0.06, 0.4, 0.06, HAZARD, [0, -0.2, 0])
+      .build();
+    return { body: b.build(), spinner: roller, spinnerAt: [0.45, 1.25, 0], spinAxis: "z", lampAt: [1.6, 0.9, 0.5] };
   }
   // cron: a clock tower
   b.block(1.6, 3.2, 1.6, accent, [-0.6, 0.3, 0], 0.1, 1.3);

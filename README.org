@@ -8,7 +8,9 @@ and watch run (and hear: every action has a synthesized sound).
 codebase ──analyzer──▶ code map (.codemap.json) ──layout──▶ world
                          (the contract)             └─ live: the code runs, traced
                                                     └─ static: runs simulated from the call graph
-#+end_example Same stack as Simon Willison's [[https://github.com/simonw/battledrones][battledrones]]: TypeScript, Vite,
+#+end_example
+
+Same stack as Simon Willison's [[https://github.com/simonw/battledrones][battledrones]]: TypeScript, Vite,
 three.js (0.185), every model built procedurally in code. Static HTML, no
 server.
 
@@ -27,6 +29,32 @@ npm run codemap -- ~/websites/hedonometer -o maps/hedonometer.codemap.json
 # (or "Open map…" in the top bar, or drop the .codemap.json on the page)
 #+end_src
 
+** A mainframe
+
+Point =codemap= at a directory of source members (COBOL, copybooks, JCL and
+PROCs, assembler, Easytrieve Plus, Fortran, IDEAL). Library folders like
+=PROD.COBOL/=, members with or without extensions, 80-column card images
+with no newlines: all fine. EBCDIC isn't: transfer as text first.
+
+#+begin_src sh
+# 1. inventory: what's there, what's missing (no -o, nothing written)
+npm run codemap -- /data/mainframe/src
+
+# 2. a world: a whole shop won't fit, so cut out what some jobs reach
+npm run codemap -- /data/mainframe/src --from 'PBNIGHT,PBMONTH' --depth 3 -o maps/billing.codemap.json
+#    --from     job, program or dataset names, or globs ('PB*', 'PROD.PB.*'); a dataset brings its readers and writers
+#    --depth N  stop N hops from one program/job/dataset into the next (shared utilities otherwise pull in everything)
+#    --lineage N  N rounds of "and the jobs that read what these wrote": data flow across jobs
+#    --no-source  leave the source text out of the map
+#+end_src
+
+The inventory prints counts by language, programs called but not in the
+source (vendor products, uncaptured libraries), missing copybooks and
+PROCs, and members defined twice (DEV/TEST/PROD copies: the first found
+wins, so point it at one environment's libraries). About 3 s and 370 MB per
+million lines; for ~10M lines give Node room:
+=NODE_OPTIONS=--max-old-space-size=8192 npm run codemap -- ...=.
+
 * The mapping
 
 | Code                          | World                                                                 |
@@ -43,6 +71,26 @@ npm run codemap -- ~/websites/hedonometer -o maps/hedonometer.codemap.json
 | a running call                | arguments ride the belt in (amber), result rides back (green) or a red error token; the machine spins, smokes, lamp goes amber |
 | a call with no belt           | flown over by drone (dynamic dispatch the analyzer missed)            |
 | a much-called function        | its incoming belts merge into trunks (a main bus) once its face is full |
+
+On a mainframe map:
+
+| Mainframe                      | World                                                                  |
+|--------------------------------+------------------------------------------------------------------------|
+| COBOL program                  | pad (signed =COBOL=, =COBOL · DB2=, =COBOL · CICS=)                     |
+| paragraph / section            | machine; the first machine, named after the PROGRAM-ID, is the entry   |
+| =PERFORM=, =PERFORM THRU=, =GO TO= | ground belt                                                          |
+| =CALL 'X'=, =CALL WS-PGM= (resolved through =VALUE= / =MOVE=), CICS =LINK= / =XCTL= | gantry belt to X's entry |
+| =SELECT f ASSIGN TO dd=        | a =FILE f= machine on the program's pad; =READ= / =WRITE= belts into it   |
+| job                            | dock (a card reader): "Submit" in the control room                      |
+| job step                       | machine on the job's pad, belted to the program it runs (=PGM==, IKJEFT01 =RUN PROGRAM()=, DFSRRC00 =PARM=, a SYSIN member like Easytrieve) |
+| PROC, INCLUDE                  | expanded into the job (steps =JSTEP.PSTEP=), symbolics substituted       |
+| DD =DSN== on a step            | belt from the program's =FILE= machine (or the step, for utilities) to the dataset |
+| dataset, GDG, =&&TEMP=, DB2 table, CICS file | store: pad with a silo and =READ= / =WRITE= machines             |
+| program not in the source      | placeholder pad under =ext/=                                            |
+| CICS =RETURN TRANSID('X')=     | receiving station (=CICS X=)                                            |
+
+So a run goes job → step → program → paragraph → file → dataset, and two
+jobs sharing a dataset share its silo.
 
 Token shape is the value's type: crate = object, barrels = array, plates =
 string, gear = number, chip = boolean, pallet = null/undefined.
@@ -71,6 +119,18 @@ to top-level =const=/=let=/=var=, class methods (=this.m()=, =Class.m()=,
 =new Class()=), ES imports, CommonJS (=require=, =module.exports=), and
 classic browser scripts sharing globals (=ns.fn = function=). Not yet:
 functions nested in closures, methods on values whose type isn't known.
+
+The mainframe analyzer (=src/analyze/cobol.ts=, =jcl.ts=, =mainframe.ts=)
+is line- and token-based, not a full parser: tolerant of dialects, wrong
+in places. COBOL: fixed or free format, COPY spliced in (record layouts and
+procedure-division copybooks), paragraphs and sections, EXEC SQL (tables
+from INSERT/UPDATE/DELETE/MERGE and FROM/JOIN, cursors through their
+DECLARE; schema qualifiers dropped), EXEC CICS. JCL: continuations, SET,
+cataloged and in-stream PROCs with defaults and EXEC overrides, =PSTEP.DD=
+overrides, INCLUDE, GDG generations, temporary datasets per job. Assembler
+(CSECTs, LINK/XCTL/LOAD/CALL, DCBs), Easytrieve (FILEs, PROCs, PERFORM,
+CALL) and Fortran (units, CALL) get a light read; IDEAL is one machine
+per member.
 
 * Sound
 
@@ -127,9 +187,16 @@ frame.contentWindow.postMessage({ codeworld: "request", method: "GET", path: "/o
 - =batch-ledger= :: mainframe-flavoured nightly batch: fixed-width
   transaction file → staging → edit (reject codes) → post to the account
   master → control report. Structured like COBOL programs and paragraphs.
+- =policy-billing= :: a made-up mainframe (static: nothing runs). Nightly
+  job: IEFBR14, SORT into a temp dataset, a cataloged PROC running the
+  COBOL extract (static and dynamic CALLs, a procedure copybook), DB2
+  posting under IKJEFT01, an Easytrieve report. Monthly job: statements
+  from a DB2 join into a GDG, an assembler print step. Plus a CICS
+  inquiry transaction.
 
 An example is a directory under =examples/= with a =codeworld.json= (title,
-description), =src/= (ES modules) and optionally =samples/=.
+description, and =language: "mainframe"= for a static mainframe one),
+=src/= and optionally =samples/=.
 
 * Status and roadmap
 
@@ -142,11 +209,26 @@ analyzer handles classes, arrows, CommonJS and classic scripts; sound.
 Tried on real repos: hedonometer.org (93 modules, 161 functions) lays out
 in ~60 ms.
 
+Status (2026-10-28): mainframe analyzer (COBOL, JCL + PROCs, assembler,
+Easytrieve, Fortran, IDEAL) with inventory, =--from= / =--depth= /
+=--lineage= slicing, job docks; =policy-billing= example. Belt router has a
+spatial index (7,300 belts lay out in 0.65 s, was minutes) and checks the
+jogs it inserts. On a synthetic 1M-line library: inventory in 3 s; a
+3,400-machine slice loads in ~8 s and draws at ~30 fps. Not yet run on the
+real mainframe sources.
+
 Known limits:
-- A few short jogs near crowded ports can still sit on each other (6–12
-  per real codebase of a few hundred belts; zero on the examples).
-- Track assignment is O(n²); fine for hundreds of belts, needs a spatial
-  index for thousands.
+- A few short jogs near crowded ports can still sit on each other: 3 on
+  hedonometer, 2 on Kings of Shutesbury, 2 on =policy-billing= (the layout
+  test allows those 2).
+- Mainframe: COBOL paragraphs falling through to the next (GO TO-style
+  code) aren't linked; nested programs (several PROGRAM-IDs in a member)
+  are read as one; CICS transaction ids come only from =RETURN TRANSID=
+  (the CSD isn't read); a program run by several steps with different
+  datasets gets belts to all of them; schedules (CA-7, Control-M, TWS)
+  aren't read, so job-to-job order is only visible through shared datasets.
+- Drawing: one mesh set per machine, so past a few thousand machines it
+  slows (load time is mostly labels).
 - Synchronous code only: an async function's calls after its first =await=
   lose their parent.
 - Only top-level =function= declarations are machines (no arrow consts,
@@ -154,11 +236,12 @@ Known limits:
 - Examples must be self-contained (no npm imports at runtime).
 
 Next, roughly in order (see =goals.toml=):
-1. Scale: instanced machines, LOD (pads collapse to blocks when zoomed out),
-   districts per directory, belt bundling. Target thousands of functions.
-2. A COBOL/JCL analyzer emitting the same =CodeGraph=: program = pad,
-   paragraph = machine, =PERFORM=/=CALL= = belt, JCL step = dock/timer, DD
-   datasets and VSAM/DB2 tables = stores, copybooks = shared parts. Then the
-   MassMutual mainframe.
-3. Async tracing (AsyncContext / zone-style), classes and methods.
-4. Hot paths: belt wear/heat from call counts; profiling time per machine.
+1. Run the inventory on the real mainframe sources and fix what it gets
+   wrong (dialects, library layouts, utilities it doesn't know).
+2. Scheduler input (job dependencies from CA-7 / Control-M / TWS exports)
+   so jobs chain on their own, and a zoomed-out view where a whole
+   application is one pad and a job stream is one belt.
+3. Scale: instanced machines, LOD (pads collapse to blocks when zoomed out),
+   belt bundling. Target tens of thousands of functions.
+4. Async tracing (AsyncContext / zone-style), classes and methods.
+5. Hot paths: belt wear/heat from call counts; profiling time per machine.

@@ -89,7 +89,7 @@ const COL_GAP = 2.2;
 const ROW_GAP = 1.4;
 const PAD_GAP = 3;
 const SILO_W = 3.4;
-const LANE = 0.5;
+const LANE = TRACK;
 
 /** Size by lines of code, grown if needed so every belt port on its busiest face gets its own track. */
 export const machineSize = (f: FnNode, ports = 0): number => Math.min(8, Math.max(f.loc <= 6 ? 2 : f.loc <= 15 ? 3 : 4, Math.ceil(ports * TRACK + 0.6)));
@@ -294,12 +294,31 @@ export function layoutWorld(graph: CodeGraph): WorldLayout {
   spread("to", "fz", "tz", "toIdx", sizeOf);
   const lanes = new Map<number, number>();
   const belts = new Map<string, Belt>();
+  // the north-south runs of ground belts between two sub-columns of a pad, so each gets its own track
+  type Seg = { axis: 0 | 2; c: number; lo: number; hi: number };
+  const crossings = new Map<string, Seg[]>();
+  const crossAt = (e: Edge): number => {
+    const mid = (e.fx + e.tx) / 2;
+    const key = `${e.corridor}:${Math.round(mid * 2)}`;
+    const used = crossings.get(key) ?? crossings.set(key, []).get(key)!;
+    // a ground belt here is three runs: out of its port to x, across, and on into its target
+    const runs = (x: number): Seg[] => [
+      { axis: 0, c: e.fz, lo: e.fx, hi: x },
+      { axis: 2, c: x, lo: Math.min(e.fz, e.tz), hi: Math.max(e.fz, e.tz) },
+      { axis: 0, c: e.tz, lo: x, hi: e.tx }
+    ];
+    const hits = (a: Seg, b: Seg) => a.axis === b.axis && Math.abs(a.c - b.c) < TRACK - 1e-6 && Math.min(a.hi, b.hi) - Math.max(a.lo, b.lo) > -0.35;
+    const options = [0, -1, 1, -2, 2].map((k) => mid + k * TRACK).filter((x) => x > e.fx + 0.45 && x < e.tx - 0.45);
+    const x = options.find((x) => !runs(x).some((r) => used.some((u) => hits(r, u)))) ?? mid;
+    used.push(...runs(x));
+    return x;
+  };
   for (const e of edges) {
     const y = BELT_Y;
     const pts: P3[] = [[e.fx, y, e.fz]];
     if (e.intra) {
       if (e.tx > e.fx + 0.6) {
-        const xm = (e.fx + e.tx) / 2;
+        const xm = Math.abs(e.fz - e.tz) > 0.01 ? crossAt(e) : (e.fx + e.tx) / 2;
         if (Math.abs(e.fz - e.tz) > 0.01) pts.push([xm, y, e.fz], [xm, y, e.tz]);
       } else {
         // backward, or within a column: round by the pad's south margin
@@ -354,6 +373,33 @@ const clash = (a: Run, b: Run): boolean =>
   a.key !== b.key && !sameTrunk(a, b) && a.axis === b.axis && Math.abs(a.y - b.y) < 0.3 && Math.abs(a.c - b.c) < TRACK - 1e-6 &&
   Math.min(a.hi, b.hi) - Math.max(a.lo, b.lo) > -0.35;
 
+/**
+ * Placed runs, bucketed by level, axis, track (1-tile cells) and extent
+ * (8-tile cells), so checking a run for clashes looks at its neighbours
+ * only, not the whole factory.
+ */
+class Placed {
+  private cells = new Map<string, Run[]>();
+  private static key = (r: Run, c: number, a: number) => `${r.axis}:${Math.round(r.y * 10)}:${c}:${a}`;
+  private static span = (r: Run) => [Math.floor((r.lo - 0.4) / 8), Math.floor((r.hi + 0.4) / 8)] as const;
+  add(...rs: Run[]): void {
+    for (const r of rs) {
+      const [a0, a1] = Placed.span(r);
+      for (let a = a0; a <= a1; a++) {
+        const k = Placed.key(r, Math.floor(r.c), a);
+        (this.cells.get(k) ?? this.cells.set(k, []).get(k)!).push(r);
+      }
+    }
+  }
+  clashes(r: Run): boolean {
+    const [a0, a1] = Placed.span(r);
+    const c = Math.floor(r.c);
+    for (let dc = -1; dc <= 1; dc++)
+      for (let a = a0; a <= a1; a++) for (const p of this.cells.get(Placed.key(r, c + dc, a)) ?? []) if (clash(r, p)) return true;
+    return false;
+  }
+}
+
 /** The fixed stub at each port: how far a belt runs straight out before it may jog aside. */
 const STUB = 0.3;
 
@@ -364,12 +410,12 @@ const STUB = 0.3;
  * moved run meets a port stub or a lift, a short jog keeps them in place.
  */
 function untangle(belts: Belt[]): void {
-  const placed: Run[] = [];
+  const placed = new Placed();
   const stub = (b: Belt, port: P3, toward: P3): void => {
     const r = runOf(b, port, toward);
     if (!r) return;
     const d = Math.sign(toward[r.axis] - port[r.axis]) * STUB;
-    placed.push({ ...r, lo: Math.min(port[r.axis], port[r.axis] + d), hi: Math.max(port[r.axis], port[r.axis] + d) });
+    placed.add({ ...r, lo: Math.min(port[r.axis], port[r.axis] + d), hi: Math.max(port[r.axis], port[r.axis] + d) });
   };
   for (const b of belts) {
     stub(b, b.pts[0]!, b.pts[1]!);
@@ -385,13 +431,22 @@ function untangle(belts: Belt[]): void {
       const first = i === 0;
       const last = i === pts.length - 2;
       const room = run.hi - run.lo - (first ? STUB : 0) - (last ? STUB : 0);
-      let c = run.c;
-      if (room > 0.15)
-        for (let k = 1; k < 40 && placed.some((p) => clash({ ...run, c }, p)); k++) c = run.c + Math.ceil(k / 2) * TRACK * (k % 2 ? 1 : -1);
-      placed.push({ ...run, c });
-      if (c === run.c) continue;
       const perp = run.axis === 0 ? 2 : 0;
       const dir = Math.sign(pts[i + 1]![run.axis] - pts[i]![run.axis]);
+      // moved to track c, the run needs a jog at each end to rejoin its belt: those must be clear too
+      const near = first ? pts[0]![run.axis] + dir * STUB : pts[i]![run.axis];
+      const far = last ? pts[i + 1]![run.axis] - dir * STUB : pts[i + 1]![run.axis];
+      const jogs = (c: number): Run[] =>
+        c === run.c ? [] : [near, far].map((at) => ({ key: run.key, trunks: run.trunks, axis: perp as 0 | 2, y: run.y, c: at, lo: Math.min(run.c, c), hi: Math.max(run.c, c) }));
+      const free = (c: number) => ![{ ...run, c }, ...jogs(c)].some((r) => placed.clashes(r));
+      let c = run.c;
+      if (room > 0.15 && !free(c)) {
+        let k = 1;
+        for (; k < 40; k++) if (free((c = run.c + Math.ceil(k / 2) * TRACK * (k % 2 ? 1 : -1)))) break;
+        if (k === 40) c = run.c; // nowhere clear nearby: stay put rather than wander off
+      }
+      placed.add({ ...run, c }, ...jogs(c));
+      if (c === run.c) continue;
       const moved = (p: P3): P3 => {
         const q: P3 = [...p];
         q[perp] = c;

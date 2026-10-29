@@ -12,7 +12,7 @@ await server.listen();
 const browser = await chromium.launch({ channel: "chrome", args: ["--use-angle=metal", "--enable-gpu", "--autoplay-policy=no-user-gesture-required"] });
 const errors = [];
 try {
-  for (const name of only ? [only] : ["hello-pipeline", "order-service", "batch-ledger"]) {
+  for (const name of only ? [only] : ["hello-pipeline", "order-service", "batch-ledger", "policy-billing"]) {
     const page = await browser.newPage({ viewport: { width: 1600, height: 1000 } });
     page.on("pageerror", (e) => errors.push(`${name}: ${e.message}`));
     page.on("console", (m) => m.type() === "error" && errors.push(`${name}: ${m.text()}`));
@@ -33,6 +33,7 @@ try {
         }
       // timers last, so a batch has something staged
       for (const f of cw.graph.fns) for (const t of f.triggers) if (t.kind === "cron") out.push(cw.tick(f.name).label);
+      for (const f of cw.graph.fns) for (const t of f.triggers) if (t.kind === "job") out.push(cw.submit(t.name).label);
       return out;
     });
     console.log(name, fired);

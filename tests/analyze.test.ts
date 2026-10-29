@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { analyzeJs, instrumentJs, resolveSpec } from "../src/analyze/js";
-import { readExamples } from "../tools/examples";
+import { graphOf, readExamples } from "../tools/examples";
 
 const examples = readExamples(new URL("../examples", import.meta.url).pathname);
 const graph = (name: string) => {
@@ -64,7 +64,7 @@ describe("instrumentJs", () => {
 });
 
 it("analyzes every example", () => {
-  for (const ex of examples) expect(analyzeJs(ex.files, { name: ex.name, ...ex.meta }).fns.length).toBeGreaterThan(0);
+  for (const ex of examples) expect(graphOf(ex).fns.length).toBeGreaterThan(0);
 });
 
 describe("real-world shapes", () => {

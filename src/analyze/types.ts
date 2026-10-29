@@ -1,16 +1,22 @@
 /**
  * The codebase graph every analyzer produces and the world is built from.
- * Language-agnostic on purpose: the JS analyzer (js.ts) is the first, but a
- * COBOL/JCL one would emit the same shapes (programs and paragraphs for
- * modules and functions, PERFORM/CALL for calls, DD files for inboxes, VSAM
- * and DB2 tables for stores).
+ * Language-agnostic on purpose: the JS analyzer (js.ts) and the mainframe
+ * one (mainframe.ts: COBOL, JCL, assembler, Easytrieve...) emit the same
+ * shapes (programs and paragraphs for modules and functions, PERFORM/CALL
+ * for calls, jobs for entry points, datasets and DB2 tables for stores).
  */
 
 /** An entry point: something outside the code that starts a run. */
 export type Trigger =
   | { kind: "route"; method: string; path: string; example?: unknown }
   | { kind: "inbox"; glob: string; sample?: string }
-  | { kind: "cron"; every: number };
+  | { kind: "cron"; every: number }
+  /** A batch job, submitted by hand (its schedule lives in the scheduler, not the source). */
+  | { kind: "job"; name: string };
+
+/** How a trigger reads on its dock's sign and in the control room. */
+export const triggerText = (t: Trigger): string =>
+  t.kind === "route" ? `${t.method} ${t.path}` : t.kind === "inbox" ? `inbox ${t.glob}` : t.kind === "cron" ? `every ${t.every}s` : `JOB ${t.name}`;
 
 export interface FnNode {
   /** `module#name`, unique in the codebase. */
@@ -38,6 +44,8 @@ export interface ModuleNode {
   loc: number;
   /** A data store (tagged `@store`): drawn as a tank farm, its size gauged by `count()`. */
   store: boolean;
+  /** What it is, when the map mixes kinds: `COBOL · DB2`, `JCL`, `DATASET`... (shown on its sign). */
+  lang?: string;
   fns: string[];
   /** Modules (or external packages, prefixed `ext:`) it imports. */
   imports: string[];

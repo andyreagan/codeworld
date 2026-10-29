@@ -1,0 +1,11 @@
+//PBEXTPRC PROC HLQ=TEST,RUNDT=
+//*********************************************************************
+//* Premium extract: PBEXTRCT over the sorted transactions.
+//*********************************************************************
+//EXTRACT  EXEC PGM=PBEXTRCT,PARM='&RUNDT'
+//TXNIN    DD DSN=&&SORTED,DISP=(OLD,DELETE)
+//POLIN    DD DSN=&HLQ..PB.POLMAST,DISP=SHR
+//EXTOUT   DD DSN=&HLQ..PB.EXTRACT,DISP=(NEW,CATLG,DELETE),
+//            SPACE=(CYL,(20,5))
+//ERROUT   DD DSN=&HLQ..PB.ERRORS,DISP=(MOD,CATLG,CATLG)
+//SYSOUT   DD SYSOUT=*

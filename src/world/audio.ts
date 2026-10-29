@@ -285,12 +285,18 @@ export class Sfx {
     });
   }
 
-  dock(kind: "route" | "inbox" | "cron", at: Where): void {
+  dock(kind: "route" | "inbox" | "cron" | "job", at: Where): void {
     this.voice(`dock-${kind}`, 0.2, at, 0.5, (out, t) => {
       if (kind === "route") {
         this.osc(out, "triangle", 659.25, 659.25, t, 0.25, 0.5);
         this.osc(out, "triangle", 830.6, 830.6, t + 0.12, 0.35, 0.5);
         return 0.5;
+      }
+      if (kind === "job") {
+        // a card reader: a fast run of clacks, then the console's beep
+        for (let i = 0; i < 14; i++) this.hiss(out, "bandpass", 2600 + Math.random() * 800, 2600, 6, t + i * 0.035, 0.012, 0.9);
+        this.osc(out, "square", 1046.5, 1046.5, t + 0.55, 0.12, 0.18);
+        return 0.7;
       }
       if (kind === "inbox") {
         this.hiss(out, "lowpass", 3500, 250, 1.5, t, 0.45, 0.9);

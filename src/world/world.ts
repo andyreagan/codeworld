@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import type { CodeGraph } from "../analyze/types";
+import { triggerText, type CodeGraph } from "../analyze/types";
 import type { CallRec } from "../runtime/trace";
 import { buildBelts, Path, type BeltMeshes } from "./belts";
 import { brighten } from "./builder";
@@ -22,7 +22,7 @@ const lampMats = {
   error: new THREE.MeshBasicMaterial({ color: BAD, toneMapped: false })
 };
 const lampGeo = new THREE.SphereGeometry(0.11, 8, 6);
-const ACCENT: Record<DockKind, number> = { route: 0x2f8f6a, inbox: 0x7a5aa8, cron: 0xa8453a };
+const ACCENT: Record<DockKind, number> = { route: 0x2f8f6a, inbox: 0x7a5aa8, cron: 0xa8453a, job: 0x3a6fa8 };
 
 /** Pad paint per top-level directory, so a package's modules read as one district. */
 const DISTRICT = [0x8d8a82, 0x8a8f96, 0x958a7c, 0x86917f, 0x93879a, 0x8c9490];
@@ -103,7 +103,8 @@ export class World {
       mesh.userData.pick = { kind: "pad", id: pad.mod.id } satisfies Pick;
       this.group.add(mesh);
       this.pickables.push(mesh);
-      const sign = label(pad.mod.id + (pad.mod.store ? "  ◆ store" : ""), {
+      const tag = pad.mod.lang ? `  · ${pad.mod.lang}` : pad.mod.store ? "  ◆ store" : "";
+      const sign = label(pad.mod.id + tag, {
         size: Math.min(1.1, Math.max(0.6, pad.w / 9)), bg: "rgba(24,22,19,0.82)", border: "#e2b33a", color: "#f6eedb"
       });
       sign.position.set(pad.x + pad.w / 2, 0.25, pad.z + 0.2);
@@ -164,7 +165,7 @@ export class World {
     lamp.position.set(...m.lampAt);
     lamp.scale.setScalar(1.6);
     const t = spot.trigger;
-    const text = t.kind === "route" ? `${t.method} ${t.path}` : t.kind === "inbox" ? `inbox ${t.glob}` : `every ${t.every}s`;
+    const text = triggerText(t);
     const sign = label(text, { size: 0.5, bg: "rgba(16,18,20,0.85)", border: "#" + ACCENT[kind].toString(16).padStart(6, "0"), color: "#ffffff" });
     sign.position.set(0, 4.3, 0);
     root.add(body, spinner, lamp, sign);

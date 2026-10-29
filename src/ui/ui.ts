@@ -1,5 +1,5 @@
 import type { Example } from "virtual:codeworld";
-import { CODEMAP_FORMAT, type CodeGraph, type FnNode } from "../analyze/types";
+import { CODEMAP_FORMAT, triggerText, type CodeGraph, type FnNode } from "../analyze/types";
 import { roots, type Driver, type Entry } from "../runtime/driver";
 import type { CallRec, Run } from "../runtime/trace";
 import type { Sfx } from "../world/audio";
@@ -92,10 +92,10 @@ export class Ui {
     const live = this.d.driver.live;
     for (const ex of this.d.examples) {
       const o = h("option", { value: ex.graph.name }, ex.graph.title);
-      if (live && ex.graph === this.graph) o.setAttribute("selected", "");
+      if (ex.graph === this.graph) o.setAttribute("selected", "");
       sel.append(o);
     }
-    if (!live) sel.prepend(h("option", { value: "", selected: "" }, this.graph.title));
+    if (!this.d.examples.some((ex) => ex.graph === this.graph)) sel.prepend(h("option", { value: "", selected: "" }, this.graph.title));
     sel.addEventListener("change", () => {
       if (!sel.value) return;
       location.href = `${location.pathname}?example=${encodeURIComponent(sel.value)}`;
@@ -169,7 +169,7 @@ export class Ui {
       h("div", { class: "card-head" }, h("span", { class: `tag ${kind}` }, kind), h("b", {}, title), h("span", { class: "fn" }, `→ ${e.fn.name}()`), locate);
     if (t.kind === "route") {
       const path = h("input", { class: "path", value: t.path.replace(/:(\w+)/g, (_: string, k: string) => (k === "id" ? "1001" : k)), spellcheck: "false" }) as HTMLInputElement;
-      const body = h("textarea", { rows: String(t.method === "GET" ? 1 : 5), spellcheck: "false" }) as HTMLTextAreaElement;
+      const body = h("textarea", { rows: String(t.method === "GET" || t.method === "CICS" ? 1 : 5), spellcheck: "false" }) as HTMLTextAreaElement;
       body.value = JSON.stringify(t.example ?? {}, null, 2);
       const send = h("button", { class: "go" }, "Send");
       send.addEventListener("click", () =>
@@ -193,6 +193,12 @@ export class Ui {
       } else kids.push(h("span", { class: "hint" }, "drag a file onto the world"));
       kids.push(out);
       return h("section", { class: "card" }, ...kids);
+    }
+    if (t.kind === "job") {
+      const submit = h("button", { class: "go" }, "Submit");
+      submit.addEventListener("click", () => fire(() => this.d.driver.tick(e.dock)));
+      const steps = this.graph.calls.filter((c) => c.from === e.fn.id).length;
+      return h("section", { class: "card" }, head("job", t.name), h("div", { class: "row" }, submit, h("span", { class: "hint" }, `${steps} steps`)), out);
     }
     const toggle = h("button", { class: "go" }, "Start timer");
     toggle.addEventListener("click", () => {
@@ -368,7 +374,7 @@ export class Ui {
           h("span", {}, f.exported ? "exported" : "private"),
           h("span", {}, `${m.calls} calls seen`)
         ),
-        entries.length ? h("div", { class: "rel" }, h("b", {}, "entry for "), ...entries.map((e) => h("code", {}, e.trigger.kind === "route" ? `${e.trigger.method} ${e.trigger.path}` : e.trigger.kind))) : "",
+        entries.length ? h("div", { class: "rel" }, h("b", {}, "entry for "), ...entries.map((e) => h("code", {}, triggerText(e.trigger)))) : "",
         callers.length ? h("div", { class: "rel" }, h("b", {}, "called by "), ...callers.map(fnLink)) : "",
         callees.length ? h("div", { class: "rel" }, h("b", {}, "calls "), ...callees.map(fnLink)) : ""
       );
@@ -397,7 +403,7 @@ export class Ui {
       el.append(
         close,
         h("div", { class: "kicker" }, `dock · ${t.kind}`),
-        h("h2", {}, t.kind === "route" ? `${t.method} ${t.path}` : t.kind === "inbox" ? `inbox ${t.glob}` : `every ${t.every}s`),
+        h("h2", {}, triggerText(t)),
         h("div", { class: "rel" }, h("b", {}, "handled by "), fnLink(e.fn.id)),
         e.fn.doc ? h("p", { class: "doc" }, e.fn.doc) : ""
       );
@@ -406,7 +412,7 @@ export class Ui {
       const gauge = this.d.world.silos.get(mod.id);
       el.append(
         close,
-        h("div", { class: "kicker" }, mod.store ? "pad · store" : "pad · module"),
+        h("div", { class: "kicker" }, `pad · ${mod.lang?.toLowerCase() ?? (mod.store ? "store" : "module")}`),
         h("h2", {}, mod.id),
         mod.doc ? h("p", { class: "doc" }, mod.doc) : "",
         h("div", { class: "badges" }, h("span", {}, `${mod.loc} lines`), h("span", {}, `${mod.fns.length} functions`), gauge ? h("span", {}, `count() = ${gauge.value}`) : ""),

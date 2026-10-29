@@ -1,7 +1,7 @@
 import { join, relative, sep } from "node:path";
 import type { Plugin } from "vite";
-import { analyzeJs, instrumentJs } from "../src/analyze/js";
-import { readExamples } from "./examples";
+import { instrumentJs } from "../src/analyze/js";
+import { graphOf, readExamples } from "./examples";
 
 const VIRTUAL = "virtual:codeworld";
 const RESOLVED = `\0${VIRTUAL}`;
@@ -9,7 +9,8 @@ const RESOLVED = `\0${VIRTUAL}`;
 /**
  * Serves the example codebases to the world:
  * - `virtual:codeworld` exports each example's CodeGraph (analyzed here, at
- *   build time), its sample files, and a loader per module;
+ *   build time), its sample files, and a loader per module (JS examples
+ *   only: a mainframe example is static, its runs simulated);
  * - every module under examples/<name>/src/ is instrumented on its way to
  *   the browser (analyze/js.ts instrumentJs), so it runs for real, traced.
  */
@@ -23,11 +24,12 @@ export function codeworld(root: string): Plugin {
     load(id) {
       if (id !== RESOLVED) return undefined;
       const entries = readExamples(dir).map((ex) => {
-        const graph = analyzeJs(ex.files, { name: ex.name, ...ex.meta });
+        const graph = graphOf(ex);
+        const live = ex.meta.language !== "mainframe";
         const loaders = Object.keys(ex.files)
-          .filter((f) => f.endsWith(".js"))
+          .filter((f) => live && f.endsWith(".js"))
           .map((f) => `${JSON.stringify(f)}: () => import(${JSON.stringify(`/examples/${ex.name}/src/${f}`)})`);
-        return `{ graph: ${JSON.stringify(graph)}, samples: ${JSON.stringify(ex.samples)}, modules: { ${loaders.join(", ")} } }`;
+        return `{ graph: ${JSON.stringify(graph)}, live: ${live}, samples: ${JSON.stringify(ex.samples)}, modules: { ${loaders.join(", ")} } }`;
       });
       return `export const examples = [${entries.join(",\n")}];`;
     },

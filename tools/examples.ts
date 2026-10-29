@@ -1,10 +1,14 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
+import { analyzeJs } from "../src/analyze/js";
+import { analyzeMainframeFiles } from "../src/analyze/mainframe";
+import type { CodeGraph } from "../src/analyze/types";
 
 /** Every example codebase under examples/: its codeworld.json, its src/ files, and its samples. */
 export interface ExampleFiles {
   name: string;
-  meta: { title: string; description: string };
+  /** `language: "mainframe"` for a static example (COBOL, JCL...: nothing runs in the page). */
+  meta: { title: string; description: string; language?: string };
   files: Record<string, string>;
   samples: Record<string, string>;
 }
@@ -15,6 +19,12 @@ function walk(dir: string, root: string, out: Record<string, string>): void {
     if (statSync(p).isDirectory()) walk(p, root, out);
     else out[relative(root, p)] = readFileSync(p, "utf8");
   }
+}
+
+/** An example's code map, from the analyzer for its language. */
+export function graphOf(ex: ExampleFiles): CodeGraph {
+  const meta = { name: ex.name, title: ex.meta.title, description: ex.meta.description };
+  return ex.meta.language === "mainframe" ? analyzeMainframeFiles(ex.files, meta).graph : analyzeJs(ex.files, meta);
 }
 
 export function readExamples(root: string): ExampleFiles[] {
