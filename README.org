@@ -14,6 +14,9 @@ Same stack as Simon Willison's [[https://github.com/simonw/battledrones][battled
 three.js (0.185), every model built procedurally in code. Static HTML, no
 server.
 
+Live demo: https://andyreagan.github.io/codeworld/ (built from =main= by
+=.github/workflows/pages.yml=).
+
 * Run it
 
 #+begin_src sh
@@ -197,6 +200,13 @@ frame.contentWindow.postMessage({ codeworld: "request", method: "GET", path: "/o
 An example is a directory under =examples/= with a =codeworld.json= (title,
 description, and =language: "mainframe"= for a static mainframe one),
 =src/= and optionally =samples/=.
+
+* Related projects
+
+Others with the same idea, a codebase as a place you can walk around:
+
+- [[https://app.preview.craftspec.com/app/city/][craftspec.com city view]]
+- [[https://github.com/BlueBlazin/blockviz][blockviz]]
 
 * Status and roadmap
 
